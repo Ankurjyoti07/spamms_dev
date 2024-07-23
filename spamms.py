@@ -1,5 +1,5 @@
 
-__version__ = '1.1.1'
+__version__ = '1.1.2'
 
 import numpy as np
 import glob
@@ -79,8 +79,19 @@ def read_cb_input_file(input_file):
         pass
 
     for param in fit_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        fit_param_values[param] = arg_parse(arg)
+        if param in fit_param_values.keys():
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = arg_parse(str(fit_param_values[param]))
+        else:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except IndexError:
+                # Handle the IndexError here
+                print(f"Error: {param} not found in input file")
 
     abund_param_values['he_abundances'] = [0.06, 0.1, 0.15, 0.2]
     abund_param_values['cno_abundances'] = [6.5, 7.0, 7.5, 8.0, 8.5]
@@ -151,8 +162,19 @@ def read_b_input_file(input_file):
         pass
 
     for param in fit_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        fit_param_values[param] = arg_parse(arg)
+        if param in fit_param_values.keys():
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = arg_parse(str(fit_param_values[param]))
+        else:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except IndexError:
+                # Handle the IndexError here
+                print(f"Error: {param} not found in input file")
 
     abund_param_values['he_abundances'] = [0.06, 0.1, 0.15, 0.2]
     abund_param_values['cno_abundances'] = [6.5, 7.0, 7.5, 8.0, 8.5]
@@ -233,11 +255,26 @@ def read_s_input_file(input_file):
         pass
 
     for param in fit_params_alt:
-        try:
-            arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-            fit_param_values[param] = arg_parse(arg)
-        except:
-            fit_param_values[param] = [-1.0]
+        if param in fit_param_values.keys():
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = arg_parse(str(fit_param_values[param]))
+        elif param in ['vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination']:
+                    try:
+                        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                        fit_param_values[param] = arg_parse(arg)
+                    except:
+                        fit_param_values[param] = [-1.0]
+        else:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except IndexError:
+                # Handle the IndexError here
+                print(f"Error: {param} not found in input file")
+
     for param in abundance_params:
         arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
         abund_param_values[param] = arg_parse(arg)
