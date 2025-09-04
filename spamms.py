@@ -77,9 +77,9 @@ def read_cb_input_file(input_file):
     fit_params = ['fillout_factor', 'teff_primary', 'teff_secondary', 'period', 'sma', 'inclination', 'q', 't0', 'async_primary', 'async_secondary', 'gamma', 'v_macro', 'v_micro', 'metallicity', 'alpha_enhancement']
     abundance_params = ['he_abundances', 'cno_abundances']
 
-    fit_param_values = {'async_primary':1.0, 'async_secondary':1.0, 'v_macro':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
+    fit_param_values = {'async_primary':1.0, 'async_secondary':1.0, 'v_macro':0.0, 'v_micro':10.0, 'metallicity':1.000, 'alpha_enhancement':0.0}
     if grid_type == 'K':
-        fit_param_values['metallicity'] = 0.00
+        fit_param_values['metallicity'] = 0.000
     abund_param_values = {}
     io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'grid_type':grid_type, 'path_to_grid':path_to_grid, 'input_file':input_file, 'rad_bound':False}
     try:
@@ -1253,7 +1253,7 @@ def lookup_line_profs_from_dic_TK(t, g, m, v, wvrange, ranges_dic, io_dict, run_
 
         combination = 'T' + str(int(t)) + '_G' + str(format(g, '.2f')) + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro']))
     elif io_dict['grid_type'] == 'T':
-        combination = 'T' + str(int(t)) + '_G' + str(format(g, '.2f')) + '_Z' + str(run_dictionary['metallicity']) + '_V' + str(int(run_dictionary['v_micro']))
+        combination = 'T' + str(int(t)) + '_G' + str(format(g, '.2f')) + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro']))
 
     w = ranges_dic[tuple(wvrange)]['wavelength'][combination]
     if v == 0:
@@ -1292,7 +1292,7 @@ def calc_flux_TK(ws, star_profs, cont_profs, mesh_vals):
     w_max = max(ws[:,-1])
     w_max = math.ceil(w_max*10)/10
 
-    wave = np.arange(w_min, w_max, 0.1)
+    wave = np.arange(w_min, w_max, 0.01)
     I_star = np.array([np.interp(wave, ws[i], star_profs[i]) for i in range(len(ws))])
     I_cont = np.array([np.interp(wave, ws[i], cont_profs[i]) for i in range(len(ws))])
 
@@ -1331,7 +1331,7 @@ def calc_flux_optimize(ws, star_profs, wind_profs, mesh_vals):
     w_max = max(ws[:,-1])
     w_max = math.ceil(w_max*10)/10
 
-    wave = np.arange(w_min, w_max, 0.1)
+    wave = np.arange(w_min, w_max, 0.01)
     I_star = np.array([np.interp(wave, ws[i], star_profs[i]) for i in range(len(ws))])
     # for i in range(len(ws)):
     #     I_star.append(np.interp(wave, ws[i], star_profs[i]))
@@ -1373,7 +1373,7 @@ def calc_flux(ws, ws_all, star_profs, wind_profs, mesh_vals):
     f = np.insert(f, len(f), f[-1], axis=0)
     wind_profs = f.T
 
-    wave = np.arange(w_min, w_max, 0.1)
+    wave = np.arange(w_min, w_max, 0.01)
     I_star = []
     I_wind = []
     for i in range(len(ws)):
@@ -1444,6 +1444,16 @@ def spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary,
         lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
 
     elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(cb, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
         lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
 
     
@@ -1527,16 +1537,16 @@ def spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary,
             mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
         
         elif io_dict['grid_type'] == 'T':
-            ts = np.where(teffs <= 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
-            tls = np.where(teffs <= 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
-            tus = np.where(teffs <= 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
 
             lgs = np.around(loggs / 0.25) * 0.25
             lgls = np.floor(loggs / 0.25) * 0.25
             lgus = np.ceil(loggs / 0.25) * 0.25
 
-            w1ts = np.where(ts <= 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
-            w2ts = np.where(ts <= 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
             w1gs = (lgus - lgs)/0.25
             w2gs = (lgs - lgls)/0.25
 
@@ -1567,6 +1577,16 @@ def spec_by_phase_b(b, line_list, abund_param_values, io_dict, run_dictionary, m
         lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
 
     elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(b, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
         lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
 
     
@@ -1641,16 +1661,16 @@ def spec_by_phase_b(b, line_list, abund_param_values, io_dict, run_dictionary, m
             mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
         
         elif io_dict['grid_type'] == 'T':
-            ts = np.where(teffs <= 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
-            tls = np.where(teffs <= 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
-            tus = np.where(teffs <= 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
 
             lgs = np.around(loggs / 0.25) * 0.25
             lgls = np.floor(loggs / 0.25) * 0.25
             lgus = np.ceil(loggs / 0.25) * 0.25
 
-            w1ts = np.where(ts <= 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
-            w2ts = np.where(ts <= 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
             w1gs = (lgus - lgs)/0.25
             w2gs = (lgs - lgls)/0.25
 
@@ -1757,16 +1777,16 @@ def spec_by_phase_s(s, line_list, abund_param_values, io_dict, run_dictionary, m
             mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
         
         elif io_dict['grid_type'] == 'T':
-            ts = np.where(teffs <= 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
-            tls = np.where(teffs <= 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
-            tus = np.where(teffs <= 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
 
             lgs = np.around(loggs / 0.25) * 0.25
             lgls = np.floor(loggs / 0.25) * 0.25
             lgus = np.ceil(loggs / 0.25) * 0.25
 
-            w1ts = np.where(ts <= 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
-            w2ts = np.where(ts <= 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
             w1gs = (lgus - lgs)/0.25
             w2gs = (lgs - lgls)/0.25
 
@@ -1797,6 +1817,16 @@ def spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, 
         lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
 
     elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(s, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
         lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
 
     for hjd in times:
@@ -1865,16 +1895,16 @@ def spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, 
             mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
         
         elif io_dict['grid_type'] == 'T':
-            ts = np.where(teffs <= 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
-            tls = np.where(teffs <= 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
-            tus = np.where(teffs <= 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
 
             lgs = np.around(loggs / 0.25) * 0.25
             lgls = np.floor(loggs / 0.25) * 0.25
             lgus = np.ceil(loggs / 0.25) * 0.25
 
-            w1ts = np.where(ts <= 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
-            w2ts = np.where(ts <= 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
             w1gs = (lgus - lgs)/0.25
             w2gs = (lgs - lgls)/0.25
 
@@ -2034,21 +2064,20 @@ def determine_tgr_combinations(cb, io_dict, run_dictionary):
 
     # TLUSTY
     elif io_dict['grid_type'] == 'T':
-        ts = np.where(teffs <= 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
-        tls = np.where(teffs <= 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
-        tus = np.where(teffs <= 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+        ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+        tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+        tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
 
         lgs = np.around(loggs / 0.25) * 0.25
         lgls = np.floor(loggs / 0.25) * 0.25
         lgus = np.ceil(loggs / 0.25) * 0.25
 
-        combinations = ['T' + str(int(ts[i])) + '_G' + format(lgs[i], '.2f') + '_Z' + str(run_dictionary['metallicity']) + '_V' + str(run_dictionary['v_micro']) for i in range(len(ts))]
-        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgls[i], '.2f') + '_Z' + str(run_dictionary['metallicity']) + '_V' + str(run_dictionary['v_micro']) for i in range(len(ts))])
-        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgus[i], '.2f') + '_Z' + str(run_dictionary['metallicity']) + '_V' + str(run_dictionary['v_micro']) for i in range(len(ts))])
-        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgls[i], '.2f') + '_Z' + str(run_dictionary['metallicity']) + '_V' + str(run_dictionary['v_micro']) for i in range(len(ts))])
-        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgus[i], '.2f') + '_Z' + str(run_dictionary['metallicity']) + '_V' + str(run_dictionary['v_micro']) for i in range(len(ts))])
+        combinations = ['T' + str(int(ts[i])) + '_G' + format(lgs[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))]
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgls[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgus[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgls[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgus[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
 
-    
     return list(set(combinations)), max(set(combinations), key=combinations.count)
 
 
