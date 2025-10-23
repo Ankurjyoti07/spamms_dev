@@ -11,6 +11,7 @@ import time
 import functools
 from scipy.interpolate import splrep, splev
 from scipy import stats
+from scipy.special import erf
 from scipy.signal import fftconvolve
 import scipy.optimize as so
 import phoebe
@@ -2694,46 +2695,208 @@ def calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictio
     return chi_array
 
 
+def calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path):
+
+    calculated_regions = glob.glob(model_path + '/hjd*')
+    hjds = [calc_region.split('/')[-1].split('_')[0].strip('hjd').ljust(13, '0') for calc_region in calculated_regions]
+    hjds = list(set(hjds))
+    hjds.sort()
+
+    bounds = [line for line in line_list]
+    obs_wave = obs_specs[hjds[0]]['wavelength']
+    inds = [i for b in bounds for i, val in  enumerate(obs_wave) if val >= b[0] and val <= b[1]]
+    inds = list(set(inds))
+    inds.sort()
+    final_wave = obs_wave[inds]
+
+    line_calc_dic = {}
+
+    mod_dic = {}
+    for hjd in hjds:
+        hjd_d = {}
+        for line in line_list:
+            wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+            w,f = np.loadtxt(model_path + '/hjd' + hjd + '_' + wave_range_string + '.txt').T
+            l_d = {'w':w, 'f':f}
+            hjd_d[wave_range_string] = l_d
+        mod_dic[hjd] = hjd_d
+
+    chi_array = []
+    chi2 = 0
+    for hjd in hjds:
+        exp_wave_all, exp_flux_all = [], []
+        for line in line_list:
+            wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+            exp_line_wave = mod_dic[hjd][wave_range_string]['w']
+            exp_line_flux = mod_dic[hjd][wave_range_string]['f']
+            exp_wave_all.append(exp_line_wave)
+            exp_flux_all.append(exp_line_flux)
+        ind_order = np.argsort([wave[0] for wave in exp_wave_all])
+        exp_wave = exp_wave_all[ind_order[0]]
+        exp_flux = exp_flux_all[ind_order[0]]
+        for j in range(1, len(ind_order)):
+            exp_wave, exp_flux = fw_stitch(exp_wave, exp_flux, exp_wave_all[ind_order[j]], exp_flux_all[ind_order[j]])
+
+        obs_wave = obs_specs[hjd]['wavelength']
+        obs_flux = obs_specs[hjd]['flux']
+        obs_flux_final = np.interp(final_wave, obs_wave, obs_flux)
+
+        exp_flux_final = np.interp(final_wave, exp_wave, exp_flux)
+        chi2 += calc_chi2(obs_flux_final, exp_flux_final)
+
+    if io_dict['object_type'] == 'contact_binary':
+        fillout_factor = run_dictionary['fillout_factor']
+        teff_primary = run_dictionary['teff_primary']
+        teff_secondary = run_dictionary['teff_secondary']
+        period = run_dictionary['period']
+        sma = run_dictionary['sma']
+        inclination = run_dictionary['inclination']
+        q = run_dictionary['q']
+        t0 = run_dictionary['t0']
+        async_primary = run_dictionary['async_primary']
+        async_secondary = run_dictionary['async_secondary']
+        gamma = run_dictionary['gamma']
+        v_macro = run_dictionary['v_macro']
+        run_id = run_dictionary['run_id']
+        metallicity = run_dictionary['metallicity']
+        if io_dict['grid_type'] == 'K':
+            alpha_enhancement = run_dictionary['alpha_enhancement']
+            chi2_info = [chi2, fillout_factor, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, metallicity, alpha_enhancement, run_id, 1]
+        else:
+            chi2_info = [chi2, fillout_factor, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, metallicity, run_id, 1]
+
+    elif io_dict['object_type'] == 'binary':
+        r_equiv_primary = run_dictionary['r_equiv_primary']
+        r_equiv_secondary = run_dictionary['r_equiv_secondary']
+        teff_primary = run_dictionary['teff_primary']
+        teff_secondary = run_dictionary['teff_secondary']
+        period = run_dictionary['period']
+        sma = run_dictionary['sma']
+        inclination = run_dictionary['inclination']
+        q = run_dictionary['q']
+        t0 = run_dictionary['t0']
+        async_primary = run_dictionary['async_primary']
+        async_secondary = run_dictionary['async_secondary']
+        pitch_primary = run_dictionary['pitch_primary']
+        pitch_secondary = run_dictionary['pitch_secondary']
+        yaw_primary = run_dictionary['yaw_primary']
+        yaw_secondary = run_dictionary['yaw_secondary']
+        gamma = run_dictionary['gamma']
+        v_macro = run_dictionary['v_macro']
+        run_id = run_dictionary['run_id']
+        metallicity = run_dictionary['metallicity']
+        if io_dict['grid_type'] == 'K':
+            alpha_enhancement = run_dictionary['alpha_enhancement']
+            chi2_info = [chi2, r_equiv_primary, r_equiv_secondary, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, pitch_primary, pitch_secondary, yaw_primary, yaw_secondary, metallicity, alpha_enhancement, run_id, 1]
+        else:
+            chi2_info = [chi2, r_equiv_primary, r_equiv_secondary, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, pitch_primary, pitch_secondary, yaw_primary, yaw_secondary, metallicity, run_id, 1]
+
+    elif io_dict['object_type'] == 'single':
+        teff = run_dictionary['teff']
+        mass = run_dictionary['mass']
+        r = run_dictionary['requiv']
+        r_pole = run_dictionary['r_pole']
+        if run_dictionary['inclination'] == -1:
+            inclination = np.arcsin(run_dictionary['vsini'] / run_dictionary['rotation_rate']) * 180/np.pi
+        else:
+            inclination = run_dictionary['inclination']
+        t0 = run_dictionary['t0']
+        gamma = run_dictionary['gamma']
+        v_macro = run_dictionary['v_macro']
+        run_id = run_dictionary['run_id']
+        v_crit_frac = run_dictionary['v_crit_frac']
+        if v_crit_frac == -1:
+            if run_dictionary['vsini'] == -1:
+                vsini = run_dictionary['rotation_rate'] * np.sin(run_dictionary['inclination'] * np.pi/180.)
+                rotation_rate = run_dictionary['rotation_rate']
+            if run_dictionary['rotation_rate'] == -1:
+                rotation_rate = run_dictionary['vsini'] / np.sin(run_dictionary['inclination'] * np.pi/180.)
+                vsini = run_dictionary['vsini']
+            else:
+                vsini = run_dictionary['vsini']
+                rotation_rate = run_dictionary['rotation_rate']
+        else:
+            rotation_rate = run_dictionary['rotation_rate']
+            vsini = run_dictionary['vsini']
+        metallicity = run_dictionary['metallicity']
+        if io_dict['grid_type'] == 'K':
+            alpha_enhancement = run_dictionary['alpha_enhancement']
+            chi2_info = [chi2, teff, vsini, rotation_rate, v_crit_frac, mass, r, r_pole, inclination, gamma, v_macro, t0, metallicity, alpha_enhancement, run_id, 1]
+        else:
+            chi2_info = [chi2, teff, vsini, rotation_rate, v_crit_frac, mass, r, r_pole, inclination, gamma, v_macro, t0, metallicity, run_id, 1]
+
+    chi_array.append(chi2_info)
+    return chi_array
+
+
 def PFGS(times, abund_param_values, line_list, io_dict, obs_specs, run_dictionary):
     print('starting...' + str(run_dictionary['run_id']))
     model_path = update_output_directories(times, abund_param_values, io_dict, run_dictionary)
     if io_dict['object_type'] == 'contact_binary':
-        cb = run_cb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
-        spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary, model_path)
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            chi_array_fail = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'K':
+            chi_array_fail = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['metallicity'], run_dictionary['alpha_enhancement'], run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'T':
+            chi_array_fail = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['metallicity'], run_dictionary['run_id'], 1]]
         try:
+            cb = run_cb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
+            spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary, model_path)
             if obs_specs == None:
-                chi_array = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+                chi_array = chi_array_fail
             else:
-                chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                if io_dict['grid_type'] in ['FW', 'FWNN']:
+                    chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                elif io_dict['grid_type'] in ['K', 'T']:
+                    chi_array = calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
         except FileNotFoundError:
             print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
-            chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 0]]
+            chi_array = chi_array_fail
+
     elif io_dict['object_type'] == 'binary':
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            chi_array_fail = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'K':
+            chi_array_fail = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], run_dictionary['metallicity'], run_dictionary['alpha_enhancement'], run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'T':
+            chi_array_fail = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], run_dictionary['metallicity'], run_dictionary['run_id'], 1]]
         try:
             b = run_b_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
             spec_by_phase_b(b, line_list, abund_param_values, io_dict, run_dictionary, model_path)
             if obs_specs == None:
-                chi_array = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+                chi_array = chi_array_fail
             else:
-                chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                if io_dict['grid_type'] in ['FW', 'FWNN']:
+                    chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                elif io_dict['grid_type'] in ['K', 'T']:
+                    chi_array = calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
         except FileNotFoundError:
             print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
-            chi_array = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 0]]
+            chi_array = chi_array_fail
     elif io_dict['object_type'] == 'single':
-        # try:
-        if io_dict['distortion'] in ['rotstar', 'sphere']:
-            s = run_s_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
-            spec_by_phase_s(s, line_list, abund_param_values, io_dict, run_dictionary, model_path)
-        elif io_dict['distortion'] in ['roche']:
-            s = run_sb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
-            spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, model_path)
-        if obs_specs == None:
-            chi_array = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
-        else:
-            chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
-        # except FileNotFoundError:
-        #     print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
-        #     chi_array = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], -1, -1, -1, -1, run_dictionary['run_id'], 0]]
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            chi_array_fail = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'K':
+            chi_array_fail = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['metallicity'], run_dictionary['alpha_enhancement'], run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'T':
+            chi_array_fail = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['metallicity'], run_dictionary['run_id'], 1]]
+        try:
+            if io_dict['distortion'] in ['rotstar', 'sphere']:
+                s = run_s_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
+                spec_by_phase_s(s, line_list, abund_param_values, io_dict, run_dictionary, model_path)
+            elif io_dict['distortion'] in ['roche']:
+                s = run_sb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
+                spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, model_path)
+            if obs_specs == None:
+                chi_array = chi_array_fail
+            else:
+                if io_dict['grid_type'] in ['FW', 'FWNN']:
+                    chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                elif io_dict['grid_type'] in ['K', 'T']:
+                    chi_array = calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+        except FileNotFoundError:
+            print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
+            chi_array = chi_array_fail
 
     return chi_array
 
@@ -2820,14 +2983,26 @@ def main():
     #     # print len(chi_full_array)
     #
     if io_dict['object_type'] == 'contact_binary':
-        np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary he c n o run_id run_success')
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary he c n o run_id run_success')
+        elif io_dict['grid_type'] == 'K':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %0.2f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary metallicity alpha_enhancement run_id run_success')
+        elif io_dict['grid_type'] == 'T':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary metallicity run_id run_success')
     elif io_dict['object_type'] == 'binary':
-        np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.2f %0.2f %0.2f %0.2f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary he c n o run_id run_success')
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary he c n o run_id run_success')
+        elif io_dict['grid_type'] == 'K':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.3f %0.2f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary metallicity alpha_enhancement run_id run_success')
+        elif io_dict['grid_type'] == 'T':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.3f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary metallicity run_id run_success')
     if io_dict['object_type'] == 'single':
-        # try:
-        np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 he c n o run_id run_success')
-        # except:
-        #     np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.2f %0.1f %0.1f %0.3f %0.3f %0.2f %0.2f %0.2f %s %s', header = 'chi2 teff rotation_rate mass r inclination gamma t0 he c n o run_id run_success')
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 he c n o run_id run_success')
+        elif io_dict['grid_type'] == 'K':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %0.2f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 metallicity alpha_enhancement run_id run_success')
+        elif io_dict['grid_type'] == 'T':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 metallicity run_id run_success')
 
     run_successes = [i[-1]==1 for i in chi_full_array]
     if np.all(np.array(run_successes)):
