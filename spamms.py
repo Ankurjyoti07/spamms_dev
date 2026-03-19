@@ -6,6 +6,10 @@ import glob
 import os
 import shutil
 from schwimmbad import MultiPool
+'''
+using schwimbad to parallalize
+'''
+
 import sys
 import itertools
 import time
