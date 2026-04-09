@@ -295,10 +295,10 @@ def read_s_input_file(input_file):
 
 
     fit_params = ['teff', 'rotation_rate', 'requiv', 'inclination', 'mass', 't0', 'gamma']
-    fit_params_alt = ['teff', 'vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination', 'mass', 't0', 'gamma', 'v_macro', 'v_micro', 'metallicity', 'alpha_enhancement']
+    fit_params_alt = ['teff', 'vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination', 'mass', 't0', 'gamma', 'v_macro', 'A_R', 'zeta_R', 'zeta_R_sig', 'zeta_T', 'zeta_T_sig',  'v_micro', 'metallicity', 'alpha_enhancement']
     abundance_params = ['he_abundances', 'cno_abundances']
 
-    fit_param_values = {'v_macro':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
+    fit_param_values = {'v_macro':0.0, 'A_R':0.5, 'zeta_R':0.0, 'zeta_R_sig':0.0, 'zeta_T':0.0, 'zeta_T_sig':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
     if grid_type == 'K':
         fit_param_values['metallicity'] = 0.00
     abund_param_values = {}
@@ -318,11 +318,11 @@ def read_s_input_file(input_file):
             except:
                 fit_param_values[param] = arg_parse(str(fit_param_values[param]))
         elif param in ['vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination']:
-                    try:
-                        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-                        fit_param_values[param] = arg_parse(arg)
-                    except:
-                        fit_param_values[param] = [-1.0]
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = [-1.0]
         else:
             try:
                 arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
@@ -330,6 +330,10 @@ def read_s_input_file(input_file):
             except IndexError:
                 # Handle the IndexError here
                 print(f"Error: {param} not found in input file")
+
+    if (fit_param_values['zeta_T'] > 0 or fit_param_values['zeta_R'] > 0) and fit_param_values['vmacro'] > 0:
+        print('vmacro and zeta_R/zeta_T cannot both be greater than 0. Defaulting to zeta_R/zeta_T and turning vmacro off')
+        fit_param_values['v_macro'] = -1.0
 
     if grid_type == 'K':
         alpha = np.where(np.array(fit_param_values['alpha_enhancement']) >= 1, 1, 0)
@@ -958,7 +962,7 @@ def assign_and_calc_abundance(mesh_vals, hjd, model_path, abund_param_values, li
         cno_abundances = [j for j in abund_param_values['cno_abundances'] for i in abund_param_values['he_abundances']]
 
     if io_dict['grid_type'] == 'FW':
-        ws, star_profs, wind_profs = assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_values)
+        ws, star_profs, wind_profs = assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_values, run_dictionary)
 
         waves = []
         phots = []
@@ -1058,7 +1062,7 @@ def assign_spectra(mesh_vals, line, lines_dic, io_dict):
     return np.array(ws), np.array(star_profs), np.array(wind_profs)
 
 
-def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_values):
+def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_values, run_dictionary):
     ts = mesh_vals['ts']
     tls = mesh_vals['tls']
     tus = mesh_vals['tus']
@@ -1091,10 +1095,31 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
 
     star_profs = np.array(star_low_profs) * w1s + np.array(star_high_profs) * w2s + np.array(star_high_profs) * w3s
     wind_profs = np.array(wind_low_profs) * w1s + np.array(wind_high_profs) * w2s + np.array(wind_high_profs) * w3s
+
+    # Macro
+    if run_dictionary['vmacro'] == -1:
+        AR = run_dictionary['A_R']
+        AT = 1-AR
+        if run_dictionary['zeta_R_sig'] > 0:
+            zeta_R = np.random.normal(run_dictionary['zeta_R'], run_dictionary['zeta_R_sig'], size=star_profs.shape[0])
+        else:
+            zeta_R = np.ones(star_profs.shape[0]) * run_dictionary['zeta_R']
+        v_R = AR * mesh_vals['mus'] * zeta_R
+
+        if run_dictionary['zeta_T_sig'] > 0:
+            zeta_T = np.random.normal(run_dictionary['zeta_T'], run_dictionary['zeta_T_sig'], size=star_profs.shape[0])
+        else:
+            zeta_T = np.ones(star_profs.shape[0]) * run_dictionary['zeta_T']
+        theta_T = np.random.uniform(0, 2*np.pi, size=star_profs.shape[0])
+        theta_mu = np.arccos(mesh_vals['mus'])
+        v_T = AT * zeta_T * np.sin(theta_mu) * np.cos(theta_T)
+    else:
+        v_R, v_T = 0.0, 0.0
+
     elapsed_time = time.time() - start_time
     # print 'Average iterations per second: ' + str(len(ts) / elapsed_time)
     # print mesh_vals['rvs']
-    ws = dopler_shift(np.array(ws), np.array([mesh_vals['rvs']]*len(ws[0])).T)
+    ws = dopler_shift(np.array(ws), np.array([mesh_vals['rvs'] + v_R + v_T]*len(ws[0])).T)
     ws=np.array(ws, dtype='float')
     return np.array(ws), np.array(star_profs), np.array(wind_profs)
 
