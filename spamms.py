@@ -295,10 +295,10 @@ def read_s_input_file(input_file):
 
 
     fit_params = ['teff', 'rotation_rate', 'requiv', 'inclination', 'mass', 't0', 'gamma']
-    fit_params_alt = ['teff', 'vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination', 'mass', 't0', 'gamma', 'v_macro', 'A_R', 'zeta_R', 'zeta_R_sig', 'zeta_T', 'zeta_T_sig',  'v_micro', 'metallicity', 'alpha_enhancement']
+    fit_params_alt = ['teff', 'vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination', 'mass', 't0', 'gamma', 'v_macro', 'A_R', 'zeta_R', 'zeta_T',  'v_micro', 'metallicity', 'alpha_enhancement']
     abundance_params = ['he_abundances', 'cno_abundances']
 
-    fit_param_values = {'v_macro':0.0, 'A_R':0.5, 'zeta_R':0.0, 'zeta_R_sig':0.0, 'zeta_T':0.0, 'zeta_T_sig':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
+    fit_param_values = {'v_macro':0.0, 'A_R':0.5, 'zeta_R':0.0, 'zeta_T':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
     if grid_type == 'K':
         fit_param_values['metallicity'] = 0.00
     abund_param_values = {}
@@ -331,9 +331,9 @@ def read_s_input_file(input_file):
                 # Handle the IndexError here
                 print(f"Error: {param} not found in input file")
 
-    if (fit_param_values['zeta_T'] > 0 or fit_param_values['zeta_R'] > 0) and fit_param_values['vmacro'] > 0:
+    if (max(fit_param_values['zeta_T']) > 0 or max(fit_param_values['zeta_R']) > 0) and np.any(np.array(fit_param_values['v_macro']) > 0):
         print('vmacro and zeta_R/zeta_T cannot both be greater than 0. Defaulting to zeta_R/zeta_T and turning vmacro off')
-        fit_param_values['v_macro'] = -1.0
+        fit_param_values['v_macro'] = [-1.0]
 
     if grid_type == 'K':
         alpha = np.where(np.array(fit_param_values['alpha_enhancement']) >= 1, 1, 0)
@@ -1101,13 +1101,13 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
         AR = run_dictionary['A_R']
         AT = 1-AR
         if run_dictionary['zeta_R_sig'] > 0:
-            zeta_R = np.random.normal(run_dictionary['zeta_R'], run_dictionary['zeta_R_sig'], size=star_profs.shape[0])
+            zeta_R = np.random.normal(0, run_dictionary['zeta_R'], size=star_profs.shape[0])
         else:
             zeta_R = np.ones(star_profs.shape[0]) * run_dictionary['zeta_R']
         v_R = AR * mesh_vals['mus'] * zeta_R
 
         if run_dictionary['zeta_T_sig'] > 0:
-            zeta_T = np.random.normal(run_dictionary['zeta_T'], run_dictionary['zeta_T_sig'], size=star_profs.shape[0])
+            zeta_T = np.random.normal(0, run_dictionary['zeta_T'], size=star_profs.shape[0])
         else:
             zeta_T = np.ones(star_profs.shape[0]) * run_dictionary['zeta_T']
         theta_T = np.random.uniform(0, 2*np.pi, size=star_profs.shape[0])
