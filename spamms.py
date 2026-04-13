@@ -1,21 +1,18 @@
 
-__version__ = '1.1.1'
+__version__ = '1.2.0'
 
 import numpy as np
 import glob
 import os
 import shutil
-from schwimmbad import MultiPool
-'''
-using schwimbad to parallalize
-'''
-
 import sys
 import itertools
 import time
 import functools
 from scipy.interpolate import splrep, splev
 from scipy import stats
+from scipy.special import erf
+from scipy.signal import fftconvolve
 import scipy.optimize as so
 import phoebe
 from phoebe import u,c
@@ -24,6 +21,8 @@ from tqdm import tqdm, trange
 import settings
 from astropy.constants import R_sun, M_sun, G
 import getopt
+# import tarfile
+# from io import BytesIO
 
 
 
@@ -67,13 +66,23 @@ def read_cb_input_file(input_file):
     path_to_grid = lines[path_to_grid_ind].split('=')[1].strip()
     if not path_to_grid.endswith('/'): path_to_grid += '/'
 
+    try:
+        grid_type_ind = [i for i in range(len(lines)) if lines[i].startswith('grid_type')][0]
+        grid_type = lines[grid_type_ind].split('=')[1].strip()
+        if grid_type not in ['FW', 'FWNN', 'T', 'K']:
+            grid_type = 'FW'
+    except:
+        grid_type = 'FW'
 
-    fit_params = ['fillout_factor', 'teff_primary', 'teff_secondary', 'period', 'sma', 'inclination', 'q', 't0', 'async_primary', 'async_secondary', 'gamma']
+
+    fit_params = ['fillout_factor', 'teff_primary', 'teff_secondary', 'period', 'sma', 'inclination', 'q', 't0', 'async_primary', 'async_secondary', 'gamma', 'v_macro', 'v_micro', 'metallicity', 'alpha_enhancement']
     abundance_params = ['he_abundances', 'cno_abundances']
 
-    fit_param_values = {'async_primary':1.0, 'async_secondary':1.0}
+    fit_param_values = {'async_primary':1.0, 'async_secondary':1.0, 'v_macro':0.0, 'v_micro':10.0, 'metallicity':1.000, 'alpha_enhancement':0.0}
+    if grid_type == 'K':
+        fit_param_values['metallicity'] = 0.000
     abund_param_values = {}
-    io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'path_to_grid':path_to_grid, 'input_file':input_file, 'rad_bound':False}
+    io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'grid_type':grid_type, 'path_to_grid':path_to_grid, 'input_file':input_file, 'rad_bound':False}
     try:
         times_ind = [i for i in range(len(lines)) if lines[i].startswith('times')][0]
         times = lines[times_ind].split('=')[1].strip()
@@ -82,28 +91,52 @@ def read_cb_input_file(input_file):
         pass
 
     for param in fit_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        fit_param_values[param] = arg_parse(arg)
+        if param in fit_param_values.keys():
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = arg_parse(str(fit_param_values[param]))
+        else:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except IndexError:
+                # Handle the IndexError here
+                print(f"Error: {param} not found in input file")
+
+    if grid_type == 'K':
+        alpha = np.where(np.array(fit_param_values['alpha_enhancement']) >= 1, 1, 0)
+        fit_param_values['alpha_enhancement'] = list(set(alpha))
 
     abund_param_values['he_abundances'] = [0.06, 0.1, 0.15, 0.2]
     abund_param_values['cno_abundances'] = [6.5, 7.0, 7.5, 8.0, 8.5]
     abund_param_values['lp_bins'] = 161
     for param in abundance_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        abund_param_values[param] = arg_parse(arg)
+        try:
+            arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+            abund_param_values[param] = arg_parse(arg)
+        except:
+            abund_param_values[param] = arg_parse(str(abund_param_values[param]))
 
     if type(abund_param_values['lp_bins']) is list:
         abund_param_values['lp_bins'] = int(abund_param_values['lp_bins'][0])
 
     abund_param_values['interpolate_abundances'] = False
+
     # interp_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('interpolate_abundances')][0]].split('=')[1].strip()
     # if interp_arg == 'False' or interp_arg == '0':
     #     abund_param_values['interpolate_abundances'] = False
     # else:
     #     abund_param_values['interpolate_abundances'] = True
 
-    line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_line_list =')][0]].split('=')[1].strip()
-    line_list = parse_line_list(line_list_arg)
+    if grid_type in ['FWNN', 'FW']:
+        line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_line_list =')][0]].split('=')[1].strip()
+        line_list = parse_line_list(line_list_arg)
+    elif grid_type in ['T', 'K']:
+        line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_wavelength_range =')][0]].split('=')[1].strip()
+        line_list = parse_wavelength_range(line_list_arg)
+
 
     return fit_param_values, abund_param_values, line_list, io_dict
 
@@ -133,6 +166,14 @@ def read_b_input_file(input_file):
     if not path_to_grid.endswith('/'): path_to_grid += '/'
 
     try:
+        grid_type_ind = [i for i in range(len(lines)) if lines[i].startswith('grid_type')][0]
+        grid_type = lines[grid_type_ind].split('=')[1].strip()
+        if grid_type not in ['FW', 'FWNN', 'T', 'K']:
+            grid_type = 'FW'
+    except:
+        grid_type = 'FW'
+
+    try:
         dist_ind = [i for i in range(len(lines)) if lines[i].startswith('distortion')][0]
         dist = lines[dist_ind].split('=')[1].strip()
         if dist not in ['rotstar', 'roche', 'sphere']:
@@ -140,12 +181,14 @@ def read_b_input_file(input_file):
     except:
         dist = 'roche'
 
-    fit_params = ['r_equiv_primary', 'r_equiv_secondary', 'teff_primary', 'teff_secondary', 'period', 'sma', 'inclination', 'q', 't0', 'async_primary', 'async_secondary', 'pitch_primary', 'pitch_secondary', 'yaw_primary', 'yaw_secondary', 'gamma']
+    fit_params = ['r_equiv_primary', 'r_equiv_secondary', 'teff_primary', 'teff_secondary', 'period', 'sma', 'inclination', 'q', 't0', 'async_primary', 'async_secondary', 'pitch_primary', 'pitch_secondary', 'yaw_primary', 'yaw_secondary', 'gamma', 'v_macro', 'v_micro', 'metallicity', 'alpha_enhancement']
     abundance_params = ['he_abundances', 'cno_abundances']
 
-    fit_param_values = {'async_primary':1.0, 'async_secondary':1.0, 'pitch_primary':0.0, 'pitch_secondary':0.0, 'yaw_primary':0.0, 'yaw_secondary':0.0}
+    fit_param_values = {'async_primary':1.0, 'async_secondary':1.0, 'pitch_primary':0.0, 'pitch_secondary':0.0, 'yaw_primary':0.0, 'yaw_secondary':0.0, 'v_macro':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
+    if grid_type == 'K':
+        fit_param_values['metallicity'] = 0.00
     abund_param_values = {}
-    io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'path_to_grid':path_to_grid, 'input_file':input_file, 'distortion':dist, 'rad_bound':False}
+    io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'path_to_grid':path_to_grid, 'grid_type':grid_type, 'input_file':input_file, 'distortion':dist, 'rad_bound':False}
     try:
         times_ind = [i for i in range(len(lines)) if lines[i].startswith('times')][0]
         times = lines[times_ind].split('=')[1].strip()
@@ -154,15 +197,33 @@ def read_b_input_file(input_file):
         pass
 
     for param in fit_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        fit_param_values[param] = arg_parse(arg)
+        if param in fit_param_values.keys():
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = arg_parse(str(fit_param_values[param]))
+        else:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except IndexError:
+                # Handle the IndexError here
+                print(f"Error: {param} not found in input file")
+
+    if grid_type == 'K':
+        alpha = np.where(np.array(fit_param_values['alpha_enhancement']) >= 1, 1, 0)
+        fit_param_values['alpha_enhancement'] = list(set(alpha))
 
     abund_param_values['he_abundances'] = [0.06, 0.1, 0.15, 0.2]
     abund_param_values['cno_abundances'] = [6.5, 7.0, 7.5, 8.0, 8.5]
     abund_param_values['lp_bins'] = 161
     for param in abundance_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        abund_param_values[param] = arg_parse(arg)
+        try:
+            arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+            abund_param_values[param] = arg_parse(arg)
+        except:
+            abund_param_values[param] = arg_parse(str(abund_param_values[param]))
 
     if type(abund_param_values['lp_bins']) is list:
         abund_param_values['lp_bins'] = int(abund_param_values['lp_bins'][0])
@@ -174,8 +235,12 @@ def read_b_input_file(input_file):
     # else:
     #     abund_param_values['interpolate_abundances'] = True
 
-    line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_line_list =')][0]].split('=')[1].strip()
-    line_list = parse_line_list(line_list_arg)
+    if grid_type in ['FWNN', 'FW']:
+        line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_line_list =')][0]].split('=')[1].strip()
+        line_list = parse_line_list(line_list_arg)
+    elif grid_type in ['T', 'K']:
+        line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_wavelength_range =')][0]].split('=')[1].strip()
+        line_list = parse_wavelength_range(line_list_arg)
 
     return fit_param_values, abund_param_values, line_list, io_dict
 
@@ -205,6 +270,14 @@ def read_s_input_file(input_file):
     if not path_to_grid.endswith('/'): path_to_grid += '/'
 
     try:
+        grid_type_ind = [i for i in range(len(lines)) if lines[i].startswith('grid_type')][0]
+        grid_type = lines[grid_type_ind].split('=')[1].strip()
+        if grid_type not in ['FW', 'FWNN', 'T', 'K']:
+            grid_type = 'FW'
+    except:
+        grid_type = 'FW'
+
+    try:
         dist_ind = [i for i in range(len(lines)) if lines[i].startswith('distortion')][0]
         dist = lines[dist_ind].split('=')[1].strip()
         if dist not in ['rotstar', 'roche', 'sphere']:
@@ -212,13 +285,24 @@ def read_s_input_file(input_file):
     except:
         dist = 'rotstar'
 
+    try:
+        gd_ind = [i for i in range(len(lines)) if lines[i].startswith('gravity_darkening')][0]
+        gd = lines[gd_ind].split('=')[1].strip()
+        if gd not in ['VZ', 'EL']:
+            gd = 'VZ'
+    except:
+        gd = 'VZ'
+
+
     fit_params = ['teff', 'rotation_rate', 'requiv', 'inclination', 'mass', 't0', 'gamma']
-    fit_params_alt = ['teff', 'vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination', 'mass', 't0', 'gamma']
+    fit_params_alt = ['teff', 'vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination', 'mass', 't0', 'gamma', 'v_macro', 'A_R', 'zeta_R', 'zeta_T',  'v_micro', 'metallicity', 'alpha_enhancement']
     abundance_params = ['he_abundances', 'cno_abundances']
 
-    fit_param_values = {}
+    fit_param_values = {'v_macro':0.0, 'A_R':0.5, 'zeta_R':0.0, 'zeta_T':0.0, 'v_micro':10.0, 'metallicity':1.0, 'alpha_enhancement':0.0}
+    if grid_type == 'K':
+        fit_param_values['metallicity'] = 0.00
     abund_param_values = {}
-    io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'path_to_grid':path_to_grid, 'input_file':input_file, 'distortion':dist, 'rad_bound':False}
+    io_dict = {'object_type':object_type, 'ntriangles':ntriangles, 'path_to_obs_spectra':path_to_obs_spectra, 'output_directory':output_directory, 'path_to_grid':path_to_grid, 'grid_type':grid_type, 'input_file':input_file, 'distortion':dist, 'gravity_darkening':gd, 'rad_bound':False}
     try:
         times_ind = [i for i in range(len(lines)) if lines[i].startswith('times')][0]
         times = lines[times_ind].split('=')[1].strip()
@@ -227,21 +311,49 @@ def read_s_input_file(input_file):
         pass
 
     for param in fit_params_alt:
-        try:
-            arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-            fit_param_values[param] = arg_parse(arg)
-        except:
-            fit_param_values[param] = [-1.0]
-    for param in abundance_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        abund_param_values[param] = arg_parse(arg)
+        if param in fit_param_values.keys():
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = arg_parse(str(fit_param_values[param]))
+        elif param in ['vsini', 'rotation_rate', 'v_crit_frac', 'requiv', 'r_pole', 'inclination']:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except:
+                fit_param_values[param] = [-1.0]
+        else:
+            try:
+                arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+                fit_param_values[param] = arg_parse(arg)
+            except IndexError:
+                # Handle the IndexError here
+                print(f"Error: {param} not found in input file")
+
+    if (max(fit_param_values['zeta_T']) > 0 or max(fit_param_values['zeta_R']) > 0) and np.any(np.array(fit_param_values['v_macro']) > 0):
+        print('vmacro and zeta_R/zeta_T cannot both be greater than 0. Defaulting to zeta_R/zeta_T and turning vmacro off')
+        fit_param_values['v_macro'] = [-1.0]
+
+    if grid_type == 'K':
+        alpha = np.where(np.array(fit_param_values['alpha_enhancement']) >= 1, 1, 0)
+        fit_param_values['alpha_enhancement'] = list(set(alpha))
+    else:
+        fit_param_values.pop('alpha_enhancement', None)
+    
+    if grid_type not in ['K', 'T']:
+        fit_param_values.pop('metallicity', None)
+        fit_param_values.pop('v_micro', None)
 
     abund_param_values['he_abundances'] = [0.06, 0.1, 0.15, 0.2]
     abund_param_values['cno_abundances'] = [6.5, 7.0, 7.5, 8.0, 8.5]
     abund_param_values['lp_bins'] = 161
     for param in abundance_params:
-        arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
-        abund_param_values[param] = arg_parse(arg)
+        try:
+            arg = lines[[i for i in range(len(lines)) if lines[i].startswith(param)][0]].split('=')[1].strip()
+            abund_param_values[param] = arg_parse(arg)
+        except:
+            abund_param_values[param] = arg_parse(str(abund_param_values[param]))
 
     if type(abund_param_values['lp_bins']) is list:
         abund_param_values['lp_bins'] = int(abund_param_values['lp_bins'][0])
@@ -253,8 +365,12 @@ def read_s_input_file(input_file):
     # else:
     #     abund_param_values['interpolate_abundances'] = True
 
-    line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_line_list =')][0]].split('=')[1].strip()
-    line_list = parse_line_list(line_list_arg)
+    if grid_type in ['FWNN', 'FW']:
+        line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_line_list =')][0]].split('=')[1].strip()
+        line_list = parse_line_list(line_list_arg)
+    elif grid_type in ['T', 'K']:
+        line_list_arg = lines[[i for i in range(len(lines)) if lines[i].startswith('selected_wavelength_range =')][0]].split('=')[1].strip()
+        line_list = parse_wavelength_range(line_list_arg)
 
     return fit_param_values, abund_param_values, line_list, io_dict
 
@@ -274,6 +390,12 @@ def parse_line_list(arg):
     arg = arg.strip('[]').split(',')
     line_list = [i.strip().strip("'") for i in arg]
     return line_list
+
+
+def parse_wavelength_range(arg):
+    arg = arg.strip('[]').split(',')
+    wave_arg_list = [i.strip().strip("'").split('-') for i in arg]
+    return np.array(wave_arg_list, dtype='float')
 
 
 def setup_output_directory(io_dict):
@@ -328,11 +450,11 @@ def check_grid(times, abund_param_values, io_dict, grid_entries, run_dictionary)
     elif io_dict['object_type'] == 'binary':
         cb = run_b_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
     else:
-        if io_dict['distortion'] == 'rotstar':
+        if io_dict['distortion'] in ['rotstar', 'sphere']:
             cb = run_s_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
         else:
             cb = run_sb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
-    combs, mode_combs = determine_tgr_combinations(cb, io_dict)
+    combs, mode_combs = determine_tgr_combinations(cb, io_dict, run_dictionary)
 
     missing_combs = [i for i in combs if i not in grid_entries]
     return missing_combs
@@ -475,8 +597,7 @@ def calc_critical_velocity(M, r_pole):
     '''
     M      - mass in units of solar mass
     r_pole - polar radius in units of solar radius
-    Calculates critival velocity given M and R
-    This is a simple rearangement of Eq. 5 above.
+    Calculates critical velocity given M and R
     '''
     # We convert all values to km, kg and s so that the final rotational velocity is in km/s
     v_crit = np.sqrt(2./3. * G.to('km3/(kg s2)') * M*M_sun.to('kg') / (r_pole*R_sun.to('km')))
@@ -534,7 +655,7 @@ def run_cb_phoebe_model(times, abund_param_values, io_dict, run_dictionary):
     cb.flip_constraint('t0_ref@binary', 't0_supconj')
     cb['t0_ref@binary@component'].set_value(value = run_dictionary['t0'])
 
-    cb['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
+    cb['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'xs', 'ys', 'zs', 'vxs', 'vys', 'vzs', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
     cb.run_compute()
 
     execution_time = time.time() - start_time_prog_1
@@ -589,7 +710,7 @@ def run_b_phoebe_model(times, abund_param_values, io_dict, run_dictionary):
     b.flip_constraint('t0_ref@binary', 't0_supconj')
     b['t0_ref@binary@component'].set_value(value = run_dictionary['t0'])
 
-    b['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
+    b['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'xs', 'ys', 'zs', 'vxs', 'vys', 'vzs', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
     b.run_compute()
 
     execution_time = time.time() - start_time_prog_1
@@ -606,6 +727,8 @@ def run_s_phoebe_model(times, abund_param_values, io_dict, run_dictionary):
     s['teff@component'].set_value(value = run_dictionary['teff'])
     s['gravb_bol'].set_value(value = 1.0)
     s['irrad_frac_refl_bol'].set_value(value = 1.0)
+
+    s['distortion_method'].set_value(value = io_dict['distortion'])
 
     s['mass@component'].set_value(value = run_dictionary['mass'])
 
@@ -686,7 +809,7 @@ def run_s_phoebe_model(times, abund_param_values, io_dict, run_dictionary):
     s['include_times'] = 't0@system'
     s['t0@system'].set_value(value = run_dictionary['t0'])
 
-    s['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
+    s['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'xs', 'ys', 'zs', 'vxs', 'vys', 'vzs', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
     s.run_compute()
 
     execution_time = time.time() - start_time_prog_1
@@ -709,6 +832,7 @@ def run_sb_phoebe_model(times, abund_param_values, io_dict, run_dictionary):
     b.flip_constraint('mass@primary', 'sma@binary')
     b.flip_constraint('mass@secondary', 'q@binary')
     b['mass@component@primary'].set_value(value = run_dictionary['mass'])
+    b['mass@component@secondary'].set_value(999)
     b['period@binary'].set_value(value = 99999999)
 
     if run_dictionary['r_pole'] != -1:
@@ -793,7 +917,7 @@ def run_sb_phoebe_model(times, abund_param_values, io_dict, run_dictionary):
     b.flip_constraint('t0_ref@binary', 't0_supconj')
     b['t0_ref@binary@component'].set_value(value = -24999999)
 
-    b['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
+    b['columns'] = ['*@lc01', '*@rv01', 'us', 'vs', 'ws', 'vus', 'vvs', 'vws', 'xs', 'ys', 'zs', 'vxs', 'vys', 'vzs', 'loggs', 'teffs', 'mus', 'visibilities', 'rs', 'areas']
     b.run_compute()
 
     execution_time = time.time() - start_time_prog_1
@@ -815,47 +939,106 @@ def update_output_directories(times, abund_param_values, io_dict, run_dictionary
     cno_abundances = [j for j in abund_param_values['cno_abundances'] for i in abund_param_values['he_abundances']]
     # he_abundances = [0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2]
     # cno_abundances = [6.5, 6.5, 6.5, 6.5, 7.0, 7.0, 7.0, 7.0, 7.5, 7.5, 7.5, 7.5, 8.0, 8.0, 8.0, 8.0, 8.5, 8.5, 8.5, 8.5]
-    for i in range(len(he_abundances)):
-        os.mkdir(model_path + '/He' + str(he_abundances[i]) + '_CNO' + str(cno_abundances[i]))
+    if io_dict['grid_type'] in ['FW']:
+        for i in range(len(he_abundances)):
+            os.mkdir(model_path + '/He' + str(he_abundances[i]) + '_CNO' + str(cno_abundances[i]))
     return model_path
 
 
-def calc_spec_by_phase(mesh_vals, hjd, model_path, lines, abund_param_values, lines_dic, io_dict):
+def calc_spec_by_phase(mesh_vals, hjd, model_path, lines, abund_param_values, lines_dic, io_dict, run_dictionary):
     nw = []
     nf = []
 
     # print 'assigning spectra'
     for line in lines:
-        assign_and_calc_abundance(mesh_vals, hjd, model_path, abund_param_values, lines_dic, io_dict, line)
+        assign_and_calc_abundance(mesh_vals, hjd, model_path, abund_param_values, lines_dic, io_dict, run_dictionary, line)
 
 
-def assign_and_calc_abundance(mesh_vals, hjd, model_path, abund_param_values, lines_dic, io_dict, line):
+def assign_and_calc_abundance(mesh_vals, hjd, model_path, abund_param_values, lines_dic, io_dict, run_dictionary, line):
     start_time = time.time()
-    he_abundances = [i for j in abund_param_values['cno_abundances'] for i in abund_param_values['he_abundances']]
-    cno_abundances = [j for j in abund_param_values['cno_abundances'] for i in abund_param_values['he_abundances']]
-    # he_abundances = [0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2, 0.06, 0.1, 0.15, 0.2]
-    # cno_abundances = [6.5, 6.5, 6.5, 6.5, 7.0, 7.0, 7.0, 7.0, 7.5, 7.5, 7.5, 7.5, 8.0, 8.0, 8.0, 8.0, 8.5, 8.5, 8.5, 8.5]
-    ws, star_profs, wind_profs = assign_spectra_interp(mesh_vals, line, lines_dic, io_dict, abund_param_values)
-    # if 'upper' in lines_dic.keys():
-    #     ws, star_profs, wind_profs = assign_spectra_interp(mesh_vals, line, lines_dic)
-    # else:
-    #     ws, star_profs, wind_profs = assign_spectra(mesh_vals, line, lines_dic)
-    waves = []
-    phots = []
-    lp_bins = abund_param_values['lp_bins']
-    for i in range(int(len(ws[0])/lp_bins)):
-        wavg_single, phot_avg_single = calc_flux_optimize(ws[:,lp_bins*i:lp_bins*(i+1)], ws, star_profs[:,lp_bins*i:lp_bins*(i+1)], wind_profs[:,lp_bins*i:lp_bins*(i+1)], mesh_vals)
-        waves.append(wavg_single)
-        phots.append(phot_avg_single/phot_avg_single[-1])
-        np.savetxt(model_path + '/He' + str(he_abundances[i]) + '_CNO' + str(cno_abundances[i]) + '/hjd' + str(round(hjd, 13)).ljust(13, '0') + '_' + line + '.txt', np.array([wavg_single, phot_avg_single/phot_avg_single[-1]]).T)
 
-    # phot_avg = interp_abundances(phots, He_abundance, CNO_abundance)
-    # wavg = waves[0]
-    # return np.array(wavg), np.array(phot_avg)/phot_avg[0]
-    # wave, phots = calc_flux_bulk(ws, star_profs, wind_profs, mesh_vals)
-    # for i in range(20):
-    #     np.savetxt(model_path + '/He' + str(he_abundances[i]) + '_CNO' + str(cno_abundances[i]) + '/hjd' + str(hjd).ljust(13, '0') + '_' + line + '.txt', np.array([wave, phots[i]/phots[i][0]]).T)
+    if io_dict['grid_type'] in ['FW', 'FWNN']:
+        he_abundances = [i for j in abund_param_values['cno_abundances'] for i in abund_param_values['he_abundances']]
+        cno_abundances = [j for j in abund_param_values['cno_abundances'] for i in abund_param_values['he_abundances']]
+
+    if io_dict['grid_type'] == 'FW':
+        ws, star_profs, wind_profs = assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_values, run_dictionary)
+
+        waves = []
+        phots = []
+        lp_bins = abund_param_values['lp_bins']
+        for i in range(int(len(ws[0])/lp_bins)):
+            wavg_single, phot_avg_single = calc_flux_optimize(ws[:,lp_bins*i:lp_bins*(i+1)], star_profs[:,lp_bins*i:lp_bins*(i+1)], wind_profs[:,lp_bins*i:lp_bins*(i+1)], mesh_vals)
+            waves.append(wavg_single)
+            phot_normalized = phot_avg_single/phot_avg_single[-1]
+            if run_dictionary['v_macro'] > 0:
+                phot_normalized = macroBroad(wavg_single, phot_normalized, run_dictionary['v_macro'])
+            phots.append(phot_normalized)
+            np.savetxt(model_path + '/He' + str(he_abundances[i]) + '_CNO' + str(cno_abundances[i]) + '/hjd' + str(round(hjd, 13)).ljust(13, '0') + '_' + line + '.txt', np.array([wavg_single, phot_normalized]).T)
+
+    elif io_dict['grid_type'] == 'FWNN':
+        for i in range(len(he_abundances)):
+            ws, star_profs, wind_profs = assign_spectra_FWNN(mesh_vals, he_abundances[i], cno_abundances[i], line, lines_dic)
+
+            wavelength, flux = calc_flux_optimize(ws, star_profs, wind_profs, mesh_vals)
+            # wavg_single, phot_avg_single = calc_flux_optimize(ws[:,lp_bins*i:lp_bins*(i+1)], star_profs[:,lp_bins*i:lp_bins*(i+1)], wind_profs[:,lp_bins*i:lp_bins*(i+1)], mesh_vals)
+            flux_normalized = flux/flux[-1]
+            if run_dictionary['v_macro'] > 0:
+                phot_normalized = macroBroad(wavelength, flux_normalized, run_dictionary['v_macro'])
+            np.savetxt(model_path + '/He' + str(he_abundances[i]) + '_CNO' + str(cno_abundances[i]) + '/hjd' + str(round(hjd, 13)).ljust(13, '0') + '_' + line + '.txt', np.array([wavelength, flux_normalized]).T)
+        
+    elif io_dict['grid_type'] in ['K', 'T']:
+        ws, star_profs, cont_profs = assign_spectra_interp_TK(mesh_vals, line, lines_dic, io_dict, run_dictionary)
+
+        wavelength, flux, flux_cont = calc_flux_TK(ws, star_profs, cont_profs, mesh_vals)
+        flux_normalized = flux/flux_cont
+
+        if run_dictionary['v_macro'] > 0:
+            phot_normalized = macroBroad(wavelength, flux_normalized, run_dictionary['v_macro'])
+        
+        wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+        np.savetxt(model_path + '/hjd' + str(round(hjd, 13)).ljust(13, '0') + '_' + wave_range_string + '.txt', np.array([wavelength, flux_normalized]).T)
+
+
     print(time.time() - start_time)
+
+
+def macroBroad(xdata, ydata, vmacro):
+    """
+    Edited broadening routine from http://dx.doi.org/10.5281/zenodo.10013
+
+      This broadens the data by a given macroturbulent velocity.
+    It works for small wavelength ranges. I need to make a better
+    version that is accurate for large wavelength ranges! Sorry
+    for the terrible variable names, it was copied from
+    convol.pro in AnalyseBstar (Karolien Lefever)
+    """
+    # Make the kernel
+    sq_pi = np.sqrt(np.pi)
+    lambda0 = np.median(xdata)
+    xspacing = xdata[1] - xdata[0]
+    mr = vmacro * lambda0 / c
+    ccr = 2 / (sq_pi * mr)
+
+    px = np.arange(-len(xdata) / 2, len(xdata) / 2 + 1) * xspacing
+    pxmr = abs(px) / mr
+    profile = ccr * (np.exp(-pxmr ** 2) + sq_pi * pxmr * (erf(pxmr) - 1.0))
+
+    # Extend the xy axes to avoid edge-effects
+    before = ydata[-profile.size / 2 + 1:]
+    after = ydata[:profile.size / 2]
+    extended = np.r_[before, ydata, after]
+
+    first = xdata[0] - float(int(profile.size / 2.0 + 0.5)) * xspacing
+    last = xdata[-1] + float(int(profile.size / 2.0 + 0.5)) * xspacing
+    x2 = np.linspace(first, last, extended.size)
+
+    conv_mode = "valid"
+
+    # Do the convolution
+    newydata = fftconvolve(extended, profile / profile.sum(), mode=conv_mode)
+
+    return newydata
 
 
 def assign_spectra(mesh_vals, line, lines_dic, io_dict):
@@ -868,7 +1051,7 @@ def assign_spectra(mesh_vals, line, lines_dic, io_dict):
     wind_profs = []
     start_time = time.time()
     for i in tqdm(range(len(ts))):
-        w, st, wi = lookup_line_profs_from_dic(ts[i], lgs[i], rads[i], mesh_vals['mus'][i], mesh_vals['viss'][i], line, lines_dic)
+        w, st, wi = lookup_line_profs_from_dic_FW(ts[i], lgs[i], rads[i], mesh_vals['mus'][i], mesh_vals['viss'][i], line, lines_dic)
         ws.append(w)
         star_profs.append(st)
         wind_profs.append(np.array(wi))
@@ -879,7 +1062,7 @@ def assign_spectra(mesh_vals, line, lines_dic, io_dict):
     return np.array(ws), np.array(star_profs), np.array(wind_profs)
 
 
-def assign_spectra_interp(mesh_vals, line, lines_dic, io_dict, abund_param_values):
+def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_values, run_dictionary):
     ts = mesh_vals['ts']
     tls = mesh_vals['tls']
     tus = mesh_vals['tus']
@@ -895,8 +1078,8 @@ def assign_spectra_interp(mesh_vals, line, lines_dic, io_dict, abund_param_value
     wind_high_profs = []
     start_time = time.time()
     for i in tqdm(range(len(ts))):
-        w, stl, wil = lookup_line_profs_from_dic(tls[i], lgs[i], rads[i], mesh_vals['mus'][i], mesh_vals['viss'][i], line, lines_dic)
-        wu, stu, wiu = lookup_line_profs_from_dic(tus[i], lgs[i], rads[i], mesh_vals['mus'][i], mesh_vals['viss'][i], line, lines_dic)
+        w, stl, wil = lookup_line_profs_from_dic_FW(tls[i], lgs[i], rads[i], mesh_vals['mus'][i], mesh_vals['viss'][i], line, lines_dic)
+        wu, stu, wiu = lookup_line_profs_from_dic_FW(tus[i], lgs[i], rads[i], mesh_vals['mus'][i], mesh_vals['viss'][i], line, lines_dic)
         ws.append(w)
         star_low_profs.append(stl)
         wind_low_profs.append(np.array(wil))
@@ -912,12 +1095,142 @@ def assign_spectra_interp(mesh_vals, line, lines_dic, io_dict, abund_param_value
 
     star_profs = np.array(star_low_profs) * w1s + np.array(star_high_profs) * w2s + np.array(star_high_profs) * w3s
     wind_profs = np.array(wind_low_profs) * w1s + np.array(wind_high_profs) * w2s + np.array(wind_high_profs) * w3s
+
+    # Macro
+    if run_dictionary['vmacro'] == -1:
+        AR = run_dictionary['A_R']
+        AT = 1-AR
+        if run_dictionary['zeta_R_sig'] > 0:
+            zeta_R = np.random.normal(0, run_dictionary['zeta_R'], size=star_profs.shape[0])
+        else:
+            zeta_R = np.ones(star_profs.shape[0]) * run_dictionary['zeta_R']
+        v_R = AR * mesh_vals['mus'] * zeta_R
+
+        if run_dictionary['zeta_T_sig'] > 0:
+            zeta_T = np.random.normal(0, run_dictionary['zeta_T'], size=star_profs.shape[0])
+        else:
+            zeta_T = np.ones(star_profs.shape[0]) * run_dictionary['zeta_T']
+        theta_T = np.random.uniform(0, 2*np.pi, size=star_profs.shape[0])
+        theta_mu = np.arccos(mesh_vals['mus'])
+        v_T = AT * zeta_T * np.sin(theta_mu) * np.cos(theta_T)
+    else:
+        v_R, v_T = 0.0, 0.0
+
+    elapsed_time = time.time() - start_time
+    # print 'Average iterations per second: ' + str(len(ts) / elapsed_time)
+    # print mesh_vals['rvs']
+    ws = dopler_shift(np.array(ws), np.array([mesh_vals['rvs'] + v_R + v_T]*len(ws[0])).T)
+    ws=np.array(ws, dtype='float')
+    return np.array(ws), np.array(star_profs), np.array(wind_profs)
+
+
+def assign_spectra_FWNN(mesh_vals, he, cno, line, lines_dic):
+    ts = mesh_vals['teffs']
+    lgs = mesh_vals['loggs']
+    rads = mesh_vals['rs']
+    cnos = np.ones_like(ts) * cno
+    hes = np.ones_like(ts) * he
+    mus = mesh_vals['mus']
+
+    w = lines_dic[line]['wavelength']
+    ws = np.tile(w, (len(ts), 1))
+    start_time = time.time()
+
+    # ORDER OF INPUTS FOR NN: teff, logg, r, cno, he, mu
+    input_array = np.array([ts, lgs, rads, cnos, hes, mus]).T
+    input_array -= lines_dic['mean']
+    input_array /= lines_dic['std']
+    
+    star_profs = 10**np.array(lines_dic[line]['phot'].predict(input_array, batch_size=10000))
+    wind_profs = 10**np.array(lines_dic[line]['wind'].predict(input_array, batch_size=10000))
+    wind_profs -= star_profs
+    # the NN calculates the wind at its radius, but spamms calculates based on stellar radius.  we'll put it into stellar radius to avoid issues
+    wind_profs /= 112**2
+    # wind_profs = 10**np.array(lines_dic[line]['wind'].predict(input_array))
+    # wind_profs = np.nan_to_num(wind_profs, nan=0.0)
+    wind_profs[wind_profs < 0] = 0.0
+    # wind_profs = np.zeros_like(wind_profs, dtype='float')
+    # wind_profs = 10**np.array(lines_dic[line]['wind'].predict(input_array))
+    # star_profs = np.zeros_like(wind_profs, dtype='float')
+
+
     elapsed_time = time.time() - start_time
     # print 'Average iterations per second: ' + str(len(ts) / elapsed_time)
     # print mesh_vals['rvs']
     ws = dopler_shift(np.array(ws), np.array([mesh_vals['rvs']]*len(ws[0])).T)
     ws=np.array(ws, dtype='float')
-    return np.array(ws), np.array(star_profs), np.array(wind_profs)
+    return np.array(ws), star_profs, wind_profs
+
+
+def assign_spectra_interp_TK(mesh_vals, wvrange, ranges_dic, io_dict, run_dictionary):
+    ts = mesh_vals['ts']
+    tls = mesh_vals['tls']
+    tus = mesh_vals['tus']
+    lgs = mesh_vals['lgs']
+    lgls = mesh_vals['lgls']
+    lgus = mesh_vals['lgus']
+    w1ts = mesh_vals['w1ts']
+    w2ts = mesh_vals['w2ts']
+    w1gs = mesh_vals['w1gs']
+    w2gs = mesh_vals['w2gs'] # in spec by phase
+
+    ws = []
+    star_lowlow_profs = []
+    star_lowhigh_profs = []
+    star_highlow_profs = []
+    star_highhigh_profs = []
+    cont_lowlow_profs = []
+    cont_lowhigh_profs = []
+    cont_highlow_profs = []
+    cont_highhigh_profs = []
+
+    start_time = time.time()
+    for i in tqdm(range(len(ts))):
+        w, stlgl, ctlgl = lookup_line_profs_from_dic_TK(tls[i], lgls[i], mesh_vals['mus'][i], mesh_vals['viss'][i], tuple(wvrange), ranges_dic, io_dict, run_dictionary)
+        w, stlgu, ctlgu = lookup_line_profs_from_dic_TK(tls[i], lgus[i], mesh_vals['mus'][i], mesh_vals['viss'][i], tuple(wvrange), ranges_dic, io_dict, run_dictionary)
+        w, stugl, ctugl = lookup_line_profs_from_dic_TK(tus[i], lgls[i], mesh_vals['mus'][i], mesh_vals['viss'][i], tuple(wvrange), ranges_dic, io_dict, run_dictionary)
+        w, stugu, ctugu = lookup_line_profs_from_dic_TK(tus[i], lgus[i], mesh_vals['mus'][i], mesh_vals['viss'][i], tuple(wvrange), ranges_dic, io_dict, run_dictionary)
+        
+        ws.append(w)
+        star_lowlow_profs.append(stlgl)
+        star_lowhigh_profs.append(stlgu)
+        star_highlow_profs.append(stugl)
+        star_highhigh_profs.append(stugu)
+        cont_lowlow_profs.append(ctlgl)
+        cont_lowhigh_profs.append(ctlgu)
+        cont_highlow_profs.append(ctugl)
+        cont_highhigh_profs.append(ctugu)
+
+    n_tot_bins = len(w)
+    w1ts = np.array([w1ts]* n_tot_bins).T
+    w2ts = np.array([w2ts]* n_tot_bins).T
+    w1gs = np.array([w1gs]* n_tot_bins).T
+    w2gs = np.array([w2gs]* n_tot_bins).T
+
+    #When you fall directly on a grid temperature, w1==w2==0.  check for this with w3
+    w3ts = w1ts + w2ts == 0
+    w3gs = w1gs + w2gs == 0
+
+    star_profs = np.array(star_lowlow_profs) * (w1ts*w1gs) + np.array(star_lowhigh_profs) * (w1ts*w2gs) + np.array(star_highlow_profs) * (w2ts*w1gs) + np.array(star_highhigh_profs) * (w2ts*w2gs) + \
+        np.array(star_lowlow_profs) * (w3ts*w1gs) + np.array(star_lowhigh_profs) * (w3ts*w2gs) + \
+            np.array(star_lowlow_profs) * (w1ts*w3gs) + np.array(star_highlow_profs) * (w2ts*w3gs) + \
+                    np.array(star_lowlow_profs) * (w3ts*w3gs)
+    
+    cont_profs = np.array(cont_lowlow_profs) * (w1ts*w1gs) + np.array(cont_lowhigh_profs) * (w1ts*w2gs) + np.array(cont_highlow_profs) * (w2ts*w1gs) + np.array(cont_highhigh_profs) * (w2ts*w2gs) + \
+        np.array(cont_lowlow_profs) * (w3ts*w1gs) + np.array(cont_lowhigh_profs) * (w3ts*w2gs) + \
+            np.array(cont_lowlow_profs) * (w1ts*w3gs) + np.array(cont_highlow_profs) * (w2ts*w3gs) + \
+                    np.array(cont_lowlow_profs) * (w3ts*w3gs)
+
+
+
+    elapsed_time = time.time() - start_time
+    # print 'Average iterations per second: ' + str(len(ts) / elapsed_time)
+    # print mesh_vals['rvs']
+    ws = dopler_shift(np.array(ws), np.array([mesh_vals['rvs']]*len(ws[0])).T)
+    ws=np.array(ws, dtype='float')
+
+    return np.array(ws), np.array(star_profs), np.array(cont_profs)
+
 
 
 def dopler_shift(w, rv):
@@ -925,7 +1238,7 @@ def dopler_shift(w, rv):
     return w*c/(c-rv)
 
 
-def lookup_line_profs_from_dic(t, g, r, m, v, line, lines_dic):
+def lookup_line_profs_from_dic_FW(t, g, r, m, v, line, lines_dic):
     combination = 'T' + str(int(t)) + '_G' + str(g) + '_R' + format(r, '.2f')
     w = lines_dic[line]['wavelength'][combination]
     if v == 0:
@@ -958,7 +1271,72 @@ def lookup_line_profs_from_dic(t, g, r, m, v, line, lines_dic):
     return w, star_prof, wind_prof
 
 
-def calc_flux_optimize(ws, ws_all, star_profs, wind_profs, mesh_vals):
+def lookup_line_profs_from_dic_TK(t, g, m, v, wvrange, ranges_dic, io_dict, run_dictionary):
+    if io_dict['grid_type'] == 'K':
+        metallicity_sign = 'p' if run_dictionary['metallicity'] >=0 else 'm'
+        alpha_str = 'a' if run_dictionary['alpha_enhancement'] == 1 else ''
+        metallicity_str = alpha_str + metallicity_sign + format(abs(run_dictionary['metallicity']), '.3f')
+
+        combination = 'T' + str(int(t)) + '_G' + str(format(g, '.2f')) + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro']))
+    elif io_dict['grid_type'] == 'T':
+        combination = 'T' + str(int(t)) + '_G' + str(format(g, '.2f')) + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro']))
+
+    w = ranges_dic[tuple(wvrange)]['wavelength'][combination]
+    if v == 0:
+        return w, np.zeros_like(w, dtype='float'), np.zeros_like(w, dtype='float')
+
+    ind = int(m*100)
+
+    upper_phot = ranges_dic[tuple(wvrange)]['phot'][combination][ind+1]
+    lower_phot = ranges_dic[tuple(wvrange)]['phot'][combination][ind]
+    upper_photcon = ranges_dic[tuple(wvrange)]['phot_cont'][combination][ind+1]
+    lower_photcon = ranges_dic[tuple(wvrange)]['phot_cont'][combination][ind]
+
+    w1 = m*100 - ind # 
+    w2 = (ind+1) - m*100
+
+    star_prof = w1*upper_phot + w2*lower_phot
+    cont_prof = w1*upper_photcon + w2*lower_photcon
+
+    return w, star_prof, cont_prof
+
+
+def calc_flux_TK(ws, star_profs, cont_profs, mesh_vals):
+    viss = mesh_vals['viss']
+    areas = mesh_vals['areas']
+    mus = mesh_vals['mus']
+    Ro = 695700000
+
+    factor_phot = viss * mus * areas / Ro**2
+
+    star_profs *= np.array([factor_phot]*len(star_profs[0])).T
+    cont_profs *= np.array([factor_phot]*len(cont_profs[0])).T
+
+
+    w_min = min(ws[:,0])
+    w_min = math.floor(w_min*10)/10
+    w_max = max(ws[:,-1])
+    w_max = math.ceil(w_max*10)/10
+
+    wave = np.arange(w_min, w_max, 0.01)
+    I_star = np.array([np.interp(wave, ws[i], star_profs[i]) for i in range(len(ws))])
+    I_cont = np.array([np.interp(wave, ws[i], cont_profs[i]) for i in range(len(ws))])
+
+    # I_star/=I_cont
+
+    indi = np.argsort(I_star[:,0])
+    indi = indi[::-1]
+    flux = np.sum(I_star, axis=0)
+    flux_cont = np.sum(I_cont, axis=0)
+    i = 0
+    while max(I_star[:,0][indi][i:]/flux[0]) > 0.05:
+        i += 1
+        flux = np.sum(I_star[indi][i:], axis=0)
+        flux_cont = np.sum(I_cont[indi][i:], axis=0)
+    return wave, flux, flux_cont
+
+
+def calc_flux_optimize(ws, star_profs, wind_profs, mesh_vals):
     viss = mesh_vals['viss']
     areas = mesh_vals['areas']
     mus = mesh_vals['mus']
@@ -974,27 +1352,17 @@ def calc_flux_optimize(ws, ws_all, star_profs, wind_profs, mesh_vals):
     star_profs += wind_profs
 
 
-    w_min = min(ws_all[:,0])
+    w_min = min(ws[:,0])
     w_min = math.floor(w_min*10)/10
-    w_max = max(ws_all[:,-1])
+    w_max = max(ws[:,-1])
     w_max = math.ceil(w_max*10)/10
 
-    w = ws.T
-    w = np.insert(w, 0, [w_min] * len(w[0]), axis=0)
-    w = np.insert(w, len(w), [w_max] * len(w[0]), axis=0)
-    ws = w.T
+    wave = np.arange(w_min, w_max, 0.01)
+    I_star = np.array([np.interp(wave, ws[i], star_profs[i]) for i in range(len(ws))])
+    # for i in range(len(ws)):
+    #     I_star.append(np.interp(wave, ws[i], star_profs[i]))
 
-    f = np.array(star_profs).T
-    f = np.insert(f, 0, f[0], axis=0)
-    f = np.insert(f, len(f), f[-1], axis=0)
-    star_profs = f.T
-
-    wave = np.arange(w_min, w_max, 0.1)
-    I_star = []
-    for i in range(len(ws)):
-        I_star.append(np.interp(wave, ws[i], star_profs[i]))
-
-    I_star = np.array(I_star)
+    # I_star = np.array(I_star)
     indi = np.argsort(I_star[:,0])
     indi = indi[::-1]
     flux = np.sum(I_star, axis=0)
@@ -1031,7 +1399,7 @@ def calc_flux(ws, ws_all, star_profs, wind_profs, mesh_vals):
     f = np.insert(f, len(f), f[-1], axis=0)
     wind_profs = f.T
 
-    wave = np.arange(w_min, w_max, 0.1)
+    wave = np.arange(w_min, w_max, 0.01)
     I_star = []
     I_wind = []
     for i in range(len(ws)):
@@ -1084,21 +1452,37 @@ def apply_rad_bound(io_dict, rads, teffs, loggs):
 
 def spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary, model_path):
     times = cb['times@dataset@lc'].value
-    interp = True
 
-    combs, mode_combs = determine_tgr_combinations(cb, io_dict)
-    grid = glob.glob(io_dict['path_to_grid'] + 'T*')
-    grid_entries = [i.split('/')[-1] for i in grid]
-    missing_combs = [i for i in combs if i not in grid_entries]
-    if len(missing_combs) > 0:
-        print('WARNING: input grid entries missing.')
-        print(missing_combs)
-    #print combs
-    lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
-    # lines_dic = line_dictionary_structure(combs, line_list, io_dict)
-    # if interp:
-    #     lines_dic = interp_line_dictionary_structure(lines_dic)
+    if io_dict['grid_type'] == 'FW':
+        combs, mode_combs = determine_tgr_combinations(cb, io_dict, run_dictionary)
 
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
+
+    elif io_dict['grid_type'] == 'FWNN':
+        lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
+
+    elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(cb, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
+
+    
     rv_primary = cb['rvs@model@primary@rv'].value
     rv_secondary = cb['rvs@model@secondary@rv'].value
 
@@ -1145,33 +1529,93 @@ def spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary,
 
         start_time = time.time()
 
-        ts = np.around(np.array(teffs) / 1000.0) * 1000.0
-        tls = np.floor(teffs / 1000.0) * 1000.0
-        tus = np.ceil(teffs / 1000.0) * 1000.0
-        w1s = (tus - teffs)/1000.0
-        w2s = (teffs - tls)/1000.0
-        lgs = np.around(loggs*10.) / 10.
-        rads = np.around(rs * 4.0) / 4.0
+        if io_dict['grid_type'] == 'FW':
+            ts = np.around(np.array(teffs) / 1000.0) * 1000.0
+            tls = np.floor(teffs / 1000.0) * 1000.0
+            tus = np.ceil(teffs / 1000.0) * 1000.0
+            w1s = (tus - teffs)/1000.0
+            w2s = (teffs - tls)/1000.0
+            lgs = np.around(loggs*10.) / 10.
+            rads = np.around(rs * 4.0) / 4.0
 
-        if io_dict['rad_bound']:
-            rads = apply_rad_bound(io_dict, rads, ts, lgs)
+            if io_dict['rad_bound']:
+                rads = apply_rad_bound(io_dict, rads, ts, lgs)
 
-        mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
 
-        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict)
+        elif io_dict['grid_type'] == 'FWNN':
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol}
+
+        elif io_dict['grid_type'] == 'K':
+            ts = np.where(teffs <= 13000, np.around(teffs / 250) * 250, np.around(teffs / 1000) * 1000)
+            tls = np.where(teffs <= 13000, np.floor(teffs / 250) * 250, np.floor(teffs / 1000) * 1000)
+            tus = np.where(teffs <= 13000, np.ceil(teffs / 250) * 250, np.ceil(teffs / 1000) * 1000)
+
+            lgs = np.around(loggs / 0.5) * 0.5
+            lgls = np.floor(loggs / 0.5) * 0.5
+            lgus = np.ceil(loggs / 0.5) * 0.5
+
+            w1ts = np.where(ts <= 13000, (tus - ts)/250.0, (tus - ts)/1000.0)
+            w2ts = np.where(ts <= 13000, (ts - tls)/250.0, (ts - tls)/1000.0)
+            w1gs = (lgus - lgs)/0.5
+            w2gs = (lgs - lgls)/0.5
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+        
+        elif io_dict['grid_type'] == 'T':
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+
+            lgs = np.around(loggs / 0.25) * 0.25
+            lgls = np.floor(loggs / 0.25) * 0.25
+            lgus = np.ceil(loggs / 0.25) * 0.25
+
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1gs = (lgus - lgs)/0.25
+            w2gs = (lgs - lgls)/0.25
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+
+
+        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict, run_dictionary)
         # print time.time() - start_time
 
 
 def spec_by_phase_b(b, line_list, abund_param_values, io_dict, run_dictionary, model_path):
     times = b['times@dataset@lc'].value
-    interp = True
 
-    combs, mode_combs = determine_tgr_combinations(b, io_dict)
-    lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
-    # lines_dic = line_dictionary_structure(combs, line_list, io_dict)
-    # if interp:
-    #     lines_dic = interp_line_dictionary_structure(lines_dic)
+    if io_dict['grid_type'] == 'FW':
+        combs, mode_combs = determine_tgr_combinations(b, io_dict, run_dictionary)
 
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
+
+    elif io_dict['grid_type'] == 'FWNN':
+        lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
+
+    elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(b, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
+
+    
     rv_primary = b['rvs@model@primary@rv'].value
     rv_secondary = b['rvs@model@secondary@rv'].value
 
@@ -1209,29 +1653,92 @@ def spec_by_phase_b(b, line_list, abund_param_values, io_dict, run_dictionary, m
 
         start_time = time.time()
 
-        ts = np.around(np.array(teffs) / 1000.0) * 1000.0
-        tls = np.floor(teffs / 1000.0) * 1000.0
-        tus = np.ceil(teffs / 1000.0) * 1000.0
-        w1s = (tus - teffs)/1000.0
-        w2s = (teffs - tls)/1000.0
-        lgs = np.around(loggs*10.) / 10.
-        rads = np.around(rs * 4.0) / 4.0
+        if io_dict['grid_type'] == 'FW':
+            ts = np.around(np.array(teffs) / 1000.0) * 1000.0
+            tls = np.floor(teffs / 1000.0) * 1000.0
+            tus = np.ceil(teffs / 1000.0) * 1000.0
+            w1s = (tus - teffs)/1000.0
+            w2s = (teffs - tls)/1000.0
+            lgs = np.around(loggs*10.) / 10.
+            rads = np.around(rs * 4.0) / 4.0
 
-        if io_dict['rad_bound']:
-            rads = apply_rad_bound(io_dict, rads, ts, lgs)
+            if io_dict['rad_bound']:
+                rads = apply_rad_bound(io_dict, rads, ts, lgs)
 
-        mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
 
-        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict)
+        elif io_dict['grid_type'] == 'FWNN':
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol}
+
+        elif io_dict['grid_type'] == 'K':
+            ts = np.where(teffs <= 13000, np.around(teffs / 250) * 250, np.around(teffs / 1000) * 1000)
+            tls = np.where(teffs <= 13000, np.floor(teffs / 250) * 250, np.floor(teffs / 1000) * 1000)
+            tus = np.where(teffs <= 13000, np.ceil(teffs / 250) * 250, np.ceil(teffs / 1000) * 1000)
+
+            lgs = np.around(loggs / 0.5) * 0.5
+            lgls = np.floor(loggs / 0.5) * 0.5
+            lgus = np.ceil(loggs / 0.5) * 0.5
+
+            w1ts = np.where(ts <= 13000, (tus - ts)/250.0, (tus - ts)/1000.0)
+            w2ts = np.where(ts <= 13000, (ts - tls)/250.0, (ts - tls)/1000.0)
+            w1gs = (lgus - lgs)/0.5
+            w2gs = (lgs - lgls)/0.5
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+        
+        elif io_dict['grid_type'] == 'T':
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+
+            lgs = np.around(loggs / 0.25) * 0.25
+            lgls = np.floor(loggs / 0.25) * 0.25
+            lgus = np.ceil(loggs / 0.25) * 0.25
+
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1gs = (lgus - lgs)/0.25
+            w2gs = (lgs - lgls)/0.25
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+
+
+        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict, run_dictionary)
         # print time.time() - start_time
 
 
 def spec_by_phase_s(s, line_list, abund_param_values, io_dict, run_dictionary, model_path):
     times = s['times@dataset@lc'].value
 
-    combs, mode_combs = determine_tgr_combinations(s, io_dict)
-    #print(combs)
-    lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
+    if io_dict['grid_type'] == 'FW':
+        combs, mode_combs = determine_tgr_combinations(s, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
+    
+    elif io_dict['grid_type'] == 'FWNN':
+        lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
+    
+    elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(s, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
+
 
     for hjd in times:
         s_t = s['%09.6f'%hjd]
@@ -1262,33 +1769,98 @@ def spec_by_phase_s(s, line_list, abund_param_values, io_dict, run_dictionary, m
 
         start_time = time.time()
 
-        ts = np.around(np.array(teffs) / 1000.0) * 1000.0
-        tls = np.floor(teffs / 1000.0) * 1000.0
-        tus = np.ceil(teffs / 1000.0) * 1000.0
-        w1s = (tus - teffs)/1000.0
-        w2s = (teffs - tls)/1000.0
-        lgs = np.around(loggs*10.) / 10.
-        rads = np.around(rs * 4.0) / 4.0
+        if io_dict['grid_type'] == 'FW':
+            ts = np.around(np.array(teffs) / 1000.0) * 1000.0
+            tls = np.floor(teffs / 1000.0) * 1000.0
+            tus = np.ceil(teffs / 1000.0) * 1000.0
+            w1s = (tus - teffs)/1000.0
+            w2s = (teffs - tls)/1000.0
+            lgs = np.around(loggs*10.) / 10.
+            rads = np.around(rs * 4.0) / 4.0
 
-        if io_dict['rad_bound']:
-            rads = apply_rad_bound(io_dict, rads, ts, lgs)
+            if io_dict['rad_bound']:
+                rads = apply_rad_bound(io_dict, rads, ts, lgs)
 
-        mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
 
-        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict)
+        elif io_dict['grid_type'] == 'FWNN':
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol}
+
+        elif io_dict['grid_type'] == 'K':
+            ts = np.where(teffs <= 13000, np.around(teffs / 250) * 250, np.around(teffs / 1000) * 1000)
+            tls = np.where(teffs <= 13000, np.floor(teffs / 250) * 250, np.floor(teffs / 1000) * 1000)
+            tus = np.where(teffs <= 13000, np.ceil(teffs / 250) * 250, np.ceil(teffs / 1000) * 1000)
+
+            lgs = np.around(loggs / 0.5) * 0.5
+            lgls = np.floor(loggs / 0.5) * 0.5
+            lgus = np.ceil(loggs / 0.5) * 0.5
+
+            w1ts = np.where(ts <= 13000, (tus - ts)/250.0, (tus - ts)/1000.0)
+            w2ts = np.where(ts <= 13000, (ts - tls)/250.0, (ts - tls)/1000.0)
+            w1gs = (lgus - lgs)/0.5
+            w2gs = (lgs - lgls)/0.5
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+        
+        elif io_dict['grid_type'] == 'T':
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+
+            lgs = np.around(loggs / 0.25) * 0.25
+            lgls = np.floor(loggs / 0.25) * 0.25
+            lgus = np.ceil(loggs / 0.25) * 0.25
+
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1gs = (lgus - lgs)/0.25
+            w2gs = (lgs - lgls)/0.25
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+
+
+        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict, run_dictionary)
         # print time.time() - start_time
 
 
 def spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, model_path):
     times = s['times@dataset@lc'].value
 
-    combs, mode_combs = determine_tgr_combinations(s, io_dict)
-    #print(combs)
-    lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
+    if io_dict['grid_type'] == 'FW':
+        combs, mode_combs = determine_tgr_combinations(s, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+        
+        lines_dic = interp_line_dictionary_structure_new(combs, line_list, io_dict, mode_combs, abund_param_values)
+    
+    elif io_dict['grid_type'] == 'FWNN':
+        lines_dic = line_dictionary_structure_FWNN(line_list, io_dict)
+
+    elif io_dict['grid_type'] in ['K', 'T']:
+        combs, mode_combs = determine_tgr_combinations(s, io_dict, run_dictionary)
+
+        # check to see if the grid is complete
+        grid = glob.glob(io_dict['path_to_grid'] + 'T*')
+        grid_entries = [i.split('/')[-1] for i in grid]
+        missing_combs = [i for i in combs if i not in grid_entries]
+        if len(missing_combs) > 0:
+            print('WARNING: input grid entries missing.')
+            print(missing_combs)
+
+        lines_dic = wavelength_range_dictionary_structure_TK(combs, line_list, io_dict)
 
     for hjd in times:
         s_t = s['%09.6f'%hjd]
-        teffs = s_t['teffs@primary'].get_value()
+        if io_dict['gravity_darkening'] == 'EL':
+            teffs = Espinosa_Lara_2011_gd_grid(s, s_t, run_dictionary)
+        else:
+            teffs = s_t['teffs@primary'].get_value()
         loggs = s_t['loggs@primary'].get_value()
         xs = s_t['us@primary'].get_value()
         ys = s_t['vs@primary'].get_value()
@@ -1315,25 +1887,124 @@ def spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, 
 
         start_time = time.time()
 
-        ts = np.around(np.array(teffs) / 1000.0) * 1000.0
-        tls = np.floor(teffs / 1000.0) * 1000.0
-        tus = np.ceil(teffs / 1000.0) * 1000.0
-        w1s = (tus - teffs)/1000.0
-        w2s = (teffs - tls)/1000.0
-        lgs = np.around(loggs*10.) / 10.
-        rads = np.around(rs * 4.0) / 4.0
+        if io_dict['grid_type'] == 'FW':
+            ts = np.around(np.array(teffs) / 1000.0) * 1000.0
+            tls = np.floor(teffs / 1000.0) * 1000.0
+            tus = np.ceil(teffs / 1000.0) * 1000.0
+            w1s = (tus - teffs)/1000.0
+            w2s = (teffs - tls)/1000.0
+            lgs = np.around(loggs*10.) / 10.
+            rads = np.around(rs * 4.0) / 4.0
 
-        if io_dict['rad_bound']:
-            rads = apply_rad_bound(io_dict, rads, ts, lgs)
+            if io_dict['rad_bound']:
+                rads = apply_rad_bound(io_dict, rads, ts, lgs)
 
-        mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1s':w1s, 'w2s':w2s, 'lgs':lgs, 'rads':rads}
 
-        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict)
+        elif io_dict['grid_type'] == 'FWNN':
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol}
+
+        elif io_dict['grid_type'] == 'K':
+            ts = np.where(teffs <= 13000, np.around(teffs / 250) * 250, np.around(teffs / 1000) * 1000)
+            tls = np.where(teffs <= 13000, np.floor(teffs / 250) * 250, np.floor(teffs / 1000) * 1000)
+            tus = np.where(teffs <= 13000, np.ceil(teffs / 250) * 250, np.ceil(teffs / 1000) * 1000)
+
+            lgs = np.around(loggs / 0.5) * 0.5
+            lgls = np.floor(loggs / 0.5) * 0.5
+            lgus = np.ceil(loggs / 0.5) * 0.5
+
+            w1ts = np.where(ts <= 13000, (tus - ts)/250.0, (tus - ts)/1000.0)
+            w2ts = np.where(ts <= 13000, (ts - tls)/250.0, (ts - tls)/1000.0)
+            w1gs = (lgus - lgs)/0.5
+            w2gs = (lgs - lgls)/0.5
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+        
+        elif io_dict['grid_type'] == 'T':
+            ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+            tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+            tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+
+            lgs = np.around(loggs / 0.25) * 0.25
+            lgls = np.floor(loggs / 0.25) * 0.25
+            lgus = np.ceil(loggs / 0.25) * 0.25
+
+            w1ts = np.where(ts < 27500, (tus - ts)/1000.0, (tus - ts)/2500.0)
+            w2ts = np.where(ts < 27500, (ts - tls)/1000.0, (ts - tls)/2500.0)
+            w1gs = (lgus - lgs)/0.25
+            w2gs = (lgs - lgls)/0.25
+
+            mesh_vals = {'teffs':teffs, 'loggs':loggs, 'rs':rs, 'mus':mus, 'rvs':rvs, 'viss':viss, 'abs_intens':abs_intens, 'areas':areas, 'ldints':ldints, 'rs_sol':rs_sol, 'ts':ts, 'tls':tls, 'tus':tus, 'w1ts':w1ts, 'w2ts':w2ts, 'lgs':lgs, 'lgls':lgls, 'lgus':lgus, 'w1gs':w1gs, 'w2gs':w2gs}
+
+
+        calc_spec_by_phase(mesh_vals, hjd, model_path, line_list, abund_param_values, lines_dic, io_dict, run_dictionary)
         # print time.time() - start_time
 
 
+def cartesian_to_spherical(x, y, z, x_c = 0, y_c = 0, z_c = 0):
+    x -= x_c
+    y -= y_c
+    z -= z_c
 
-def determine_tgr_combinations(cb, io_dict):
+    r = np.sqrt(x**2 + y**2 + z**2)
+    theta = np.arccos(np.abs(z) / r)
+    theta -= (theta > np.pi) * np.pi
+    phi = np.arctan(y/x)
+
+    return r, theta, phi
+
+
+def interpolate_psi_grid(v_linear_crit_frac):
+    psi_grid = np.load('psi_grid.npy')
+    v_linear_percent_crit = v_linear_crit_frac * 100
+
+    if (v_linear_percent_crit).is_integer():
+        psis = psi_grid[int(v_linear_percent_crit)]
+    else:
+        v_upper = int(np.ceil(v_linear_percent_crit))
+        v_lower = int(np.floor(v_linear_percent_crit))
+
+        weight_lower = v_upper - v_linear_percent_crit
+        weight_upper = v_linear_percent_crit - v_lower
+
+        psis = psi_grid[v_upper] * weight_upper + psi_grid[v_lower] * weight_lower
+    return psis
+
+
+def Espinosa_Lara_2011_gd_grid(s_full, s, run_dictionary):
+
+    loggs = s['loggs@primary'].get_value()
+    # grab total surface area
+    areas = s['areas@primary'].get_value()
+    area = np.sum(areas)
+
+    # grab r, theta, phi
+    x = s['xs@primary'].get_value()
+    y = s['ys@primary'].get_value()
+    z = s['zs@primary'].get_value()
+
+    # x_c = s_full['xs@orb@primary'].get_value()[0]
+    # y_c = s_full['zs@orb@primary'].get_value()[0]
+    # z_c = s_full['ys@orb@primary'].get_value()[0]
+
+    x_c = 0
+    y_c = 0
+    z_c = 0
+
+    rs, thetas, phis = cartesian_to_spherical(x, y, z, x_c, y_c, z_c)
+
+    # calculate psi
+    psis_grid = interpolate_psi_grid(run_dictionary['v_crit_frac'])
+    thetas_grid = np.load('theta_grid.npy')
+    psis = np.interp(thetas, thetas_grid, psis_grid)
+
+#     Ts = (T_eff**4 * area / (4 * np.pi * r_equator**2))**(1./4.) * (1/r_prime**4 + w**4 * r_prime**2 * np.sin(thetas)**2 - 2 * w**2 * np.sin(thetas)**2 / r_prime)**(1./8.) * np.sqrt(np.tan(psis)/np.tan(thetas))
+    Ts = (run_dictionary['teff']**4 * area / (4 * np.pi * c.G.to('solRad3/(solMass s2)').value * run_dictionary['mass']))**(1./4.) * np.sqrt(np.tan(psis)/np.tan(thetas)) * (10**loggs / c.R_sun.to('cm').value)**(1./4.)
+
+    return Ts
+
+
+def determine_tgr_combinations(cb, io_dict, run_dictionary):
     times = cb['times@dataset@lc'].value
     teffs = []
     loggs = []
@@ -1347,7 +2018,7 @@ def determine_tgr_combinations(cb, io_dict):
             loggs.extend(logg)
             rs.extend(r)
     elif io_dict['object_type'] == 'single':
-        if io_dict['distortion'] in ['rotstar']:
+        if io_dict['distortion'] in ['rotstar', 'sphere']:
             # if len(times) > 1:
             for i in times:
                 phcb = cb['%09.6f'%i]
@@ -1364,28 +2035,77 @@ def determine_tgr_combinations(cb, io_dict):
         else:
             for i in times:
                 phcb = cb['%09.6f'%i]
-                teff = phcb['teffs@primary'].get_value()
                 logg = phcb['loggs@primary'].get_value()
                 r = phcb['rs@primary'].get_value()
+                if io_dict['gravity_darkening'] == 'EL':
+                    teff = Espinosa_Lara_2011_gd_grid(cb, phcb, run_dictionary)
+                else:
+                    teff = phcb['teffs@primary'].get_value()
+                # teff = phcb['teffs@primary'].get_value()
                 teffs.extend(teff)
                 loggs.extend(logg)
                 rs.extend(r)
 
-    ts = np.around(np.array(teffs) / 1000.0) * 1000.0
-    tls = np.floor(np.array(teffs) / 1000.0) * 1000.0
-    tus = np.ceil(np.array(teffs) / 1000.0) * 1000.0
-    lgs = np.around(np.array(loggs)*10.) / 10.
-    rads = np.around(np.array(rs) * 4.0) / 4.0
-    if io_dict['rad_bound']:
-        rads = apply_rad_bound(io_dict, rads, ts, lgs)
-    # if io_dict['rad_bound']:
-    #     rads = rads * (rads <= 9.) + 9.*(rads > 9.)
-    #     rads = rads * (rads >= 6.5) + 6.5*(rads < 6.5)
-    # lgs = lgs * (lgs >= 3.) + 3.*(lgs < 3.)
-    # combinations = ['T' + str(int(ts[i])) + '_G' + str(lgs[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))]
-    combinations = ['T' + str(int(tls[i])) + '_G' + str(lgs[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))]
-    combinations.extend(['T' + str(int(tus[i])) + '_G' + str(lgs[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+    teffs = np.array(teffs)
+    loggs = np.array(loggs)
+    rs = np.array(rs)
+
+    if io_dict['grid_type'] == 'FW':
+        ts = np.around(teffs / 1000.0) * 1000.0
+        tls = np.floor(teffs / 1000.0) * 1000.0
+        tus = np.ceil(teffs / 1000.0) * 1000.0
+        lgs = np.around(loggs*10.) / 10.
+        lgls = np.floor(loggs / 0.1) * 0.1
+        lgus = np.ceil(loggs / 0.1) * 0.1
+        rads = np.around(rs * 4.0) / 4.0
+        if io_dict['rad_bound']:
+            rads = apply_rad_bound(io_dict, rads, ts, lgs)
+
+        combinations = ['T' + str(int(tls[i])) + '_G' + str(lgs[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))]
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + str(lgls[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + str(lgus[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + str(lgls[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + str(lgus[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        
+    
+    elif io_dict['grid_type'] == 'K':
+        ts = np.where(teffs <= 13000, np.around(teffs / 250) * 250, np.around(teffs / 1000) * 1000)
+        tls = np.where(teffs <= 13000, np.floor(teffs / 250) * 250, np.floor(teffs / 1000) * 1000)
+        tus = np.where(teffs <= 13000, np.ceil(teffs / 250) * 250, np.ceil(teffs / 1000) * 1000)
+
+        lgs = np.around(loggs / 0.5) * 0.5
+        lgls = np.floor(loggs / 0.5) * 0.5
+        lgus = np.ceil(loggs / 0.5) * 0.5
+
+        metallicity_sign = 'p' if run_dictionary['metallicity'] >=0 else 'm'
+        alpha_str = 'a' if run_dictionary['alpha_enhancement'] == 1 else ''
+        metallicity_str = alpha_str + metallicity_sign + format(abs(run_dictionary['metallicity']), '.3f')
+
+        combinations = ['T' + str(int(ts[i])) + '_G' + format(lgs[i], '.2f') + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))]
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgls[i], '.2f') + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgus[i], '.2f') + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgls[i], '.2f') + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgus[i], '.2f') + '_M' + metallicity_str + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))]) #f"{lgus[i]:.1f}"
+
+
+    # TLUSTY
+    elif io_dict['grid_type'] == 'T':
+        ts = np.where(teffs < 27500, np.around(teffs / 1000) * 1000, np.around(teffs / 2500) * 2500)
+        tls = np.where(teffs < 27500, np.floor(teffs / 1000) * 1000, np.floor(teffs / 2500) * 2500)
+        tus = np.where(teffs < 27500, np.ceil(teffs / 1000) * 1000, np.ceil(teffs / 2500) * 2500)
+
+        lgs = np.around(loggs / 0.25) * 0.25
+        lgls = np.floor(loggs / 0.25) * 0.25
+        lgus = np.ceil(loggs / 0.25) * 0.25
+
+        combinations = ['T' + str(int(ts[i])) + '_G' + format(lgs[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))]
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgls[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgus[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgls[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgus[i], '.2f') + '_Z' + format(abs(run_dictionary['metallicity']), '.3f') + '_V' + str(int(run_dictionary['v_micro'])) for i in range(len(ts))])
+
     return list(set(combinations)), max(set(combinations), key=combinations.count)
+
 
 
 def line_dictionary_structure(combinations, lines, io_dict):
@@ -1407,6 +2127,65 @@ def line_dictionary_structure(combinations, lines, io_dict):
         lines_dic[line] = line_dic
     return lines_dic
 
+
+def line_dictionary_structure_FWNN(lines, io_dict):
+    import keras
+
+    lines_dic = {}
+    for line in lines:
+        filepath = io_dict['path_to_grid'] + line + '/'
+        wl = np.load(filepath + 'wnew_' + line + '.npy')
+        wi = keras.saving.load_model(filepath + 'winds_%s_model.keras'%line)
+        ph = keras.saving.load_model(filepath + 'phots_%s_model.keras'%line)
+        line_dic = {'wavelength': wl, 'wind':wi, 'phot':ph}
+        lines_dic[line] = line_dic
+    mean, std = np.loadtxt(io_dict['path_to_grid'] + 'norm_array.txt')
+    lines_dic['mean'] = mean
+    lines_dic['std'] = std
+    return lines_dic
+
+
+def wavelength_range_dictionary_structure_TK(combinations, wavelength_dict, io_dict):
+    ranges_dic = {}
+
+    filepath = io_dict['path_to_grid']
+
+    for wvrange in wavelength_dict:
+        wl = {}
+        ph = {}
+        ph_cont = {}
+
+        for combination in combinations:
+            # w = load_tar_npy(filepath + combination + '.tar.gz', '_wave.npy')
+            # phot = load_tar_npy(filepath + combination + '.tar.gz', '_intens.npy')
+            # phot_cont = load_tar_npy(filepath + combination + '.tar.gz', '_contintens.npy')
+            w = np.load(filepath + combination + '/' + combination + '_wave.npy')
+            phot = np.load(filepath + combination + '/' + combination + '_intens.npy')
+            phot_cont = np.load(filepath + combination + '/' + combination + '_contintens.npy')
+
+            mask_range = (w >= wvrange[0]) & (w <= wvrange[1])
+            w_range = w[mask_range]
+            phot_range = phot[:, mask_range]
+            phot_cont_range = phot_cont[:, mask_range]
+
+            wl[combination] = w_range
+            ph[combination] = phot_range
+            ph_cont[combination] = phot_cont_range
+
+        range_dic = {'wavelength': wl, 'phot': ph, 'phot_cont': ph_cont}
+        ranges_dic[tuple(wvrange)] = range_dic
+
+    return ranges_dic
+
+'''
+def load_tar_npy(tarball, file_extension):
+    with tarfile.open(tarball, 'r') as tar:
+        array_file = BytesIO()
+        array_file.write(tar.extractfile('./%s%s' %(tarball.split('/')[-1][:-7], file_extension)).read())
+        array_file.seek(0)
+        w = np.load(array_file, allow_pickle=True)
+    return w
+'''
 
 def interp_line_dictionary_structure_new(combinations, lines, io_dict, mode_combs, abund_param_values):
     lines_dic = {}
@@ -1883,8 +2662,9 @@ def calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictio
                         async_primary = run_dictionary['async_primary']
                         async_secondary = run_dictionary['async_secondary']
                         gamma = run_dictionary['gamma']
+                        v_macro = run_dictionary['v_macro']
                         run_id = run_dictionary['run_id']
-                        chi2_info = [chi2, fillout_factor, teff_primary, teff_secondary, period, sma, q, inclination, gamma, t0, async_primary, async_secondary, float(he), float(c), float(n), float(o), run_id, 1]
+                        chi2_info = [chi2, fillout_factor, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, float(he), float(c), float(n), float(o), run_id, 1]
 
                     elif io_dict['object_type'] == 'binary':
                         r_equiv_primary = run_dictionary['r_equiv_primary']
@@ -1903,8 +2683,9 @@ def calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictio
                         yaw_primary = run_dictionary['yaw_primary']
                         yaw_secondary = run_dictionary['yaw_secondary']
                         gamma = run_dictionary['gamma']
+                        v_macro = run_dictionary['v_macro']
                         run_id = run_dictionary['run_id']
-                        chi2_info = [chi2, r_equiv_primary, r_equiv_secondary, teff_primary, teff_secondary, period, sma, q, inclination, gamma, t0, async_primary, async_secondary, pitch_primary, pitch_secondary, yaw_primary, yaw_secondary, float(he), float(c), float(n), float(o), run_id, 1]
+                        chi2_info = [chi2, r_equiv_primary, r_equiv_secondary, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, pitch_primary, pitch_secondary, yaw_primary, yaw_secondary, float(he), float(c), float(n), float(o), run_id, 1]
 
                     elif io_dict['object_type'] == 'single':
                         teff = run_dictionary['teff']
@@ -1917,6 +2698,7 @@ def calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictio
                             inclination = run_dictionary['inclination']
                         t0 = run_dictionary['t0']
                         gamma = run_dictionary['gamma']
+                        v_macro = run_dictionary['v_macro']
                         run_id = run_dictionary['run_id']
                         v_crit_frac = run_dictionary['v_crit_frac']
                         if v_crit_frac == -1:
@@ -1932,9 +2714,143 @@ def calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictio
                         else:
                             rotation_rate = run_dictionary['rotation_rate']
                             vsini = run_dictionary['vsini']
-                        chi2_info = [chi2, teff, vsini, rotation_rate, v_crit_frac, mass, r, r_pole, inclination, gamma, t0, float(he), float(c), float(n), float(o), run_id, 1]
+                        chi2_info = [chi2, teff, vsini, rotation_rate, v_crit_frac, mass, r, r_pole, inclination, gamma, v_macro, t0, float(he), float(c), float(n), float(o), run_id, 1]
 
                     chi_array.append(chi2_info)
+    return chi_array
+
+
+def calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path):
+
+    calculated_regions = glob.glob(model_path + '/hjd*')
+    hjds = [calc_region.split('/')[-1].split('_')[0].strip('hjd').ljust(13, '0') for calc_region in calculated_regions]
+    hjds = list(set(hjds))
+    hjds.sort()
+
+    bounds = [line for line in line_list]
+    obs_wave = obs_specs[hjds[0]]['wavelength']
+    inds = [i for b in bounds for i, val in  enumerate(obs_wave) if val >= b[0] and val <= b[1]]
+    inds = list(set(inds))
+    inds.sort()
+    final_wave = obs_wave[inds]
+
+    line_calc_dic = {}
+
+    mod_dic = {}
+    for hjd in hjds:
+        hjd_d = {}
+        for line in line_list:
+            wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+            w,f = np.loadtxt(model_path + '/hjd' + hjd + '_' + wave_range_string + '.txt').T
+            l_d = {'w':w, 'f':f}
+            hjd_d[wave_range_string] = l_d
+        mod_dic[hjd] = hjd_d
+
+    chi_array = []
+    chi2 = 0
+    for hjd in hjds:
+        exp_wave_all, exp_flux_all = [], []
+        for line in line_list:
+            wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+            exp_line_wave = mod_dic[hjd][wave_range_string]['w']
+            exp_line_flux = mod_dic[hjd][wave_range_string]['f']
+            exp_wave_all.append(exp_line_wave)
+            exp_flux_all.append(exp_line_flux)
+        ind_order = np.argsort([wave[0] for wave in exp_wave_all])
+        exp_wave = exp_wave_all[ind_order[0]]
+        exp_flux = exp_flux_all[ind_order[0]]
+        for j in range(1, len(ind_order)):
+            exp_wave, exp_flux = fw_stitch(exp_wave, exp_flux, exp_wave_all[ind_order[j]], exp_flux_all[ind_order[j]])
+
+        obs_wave = obs_specs[hjd]['wavelength']
+        obs_flux = obs_specs[hjd]['flux']
+        obs_flux_final = np.interp(final_wave, obs_wave, obs_flux)
+
+        exp_flux_final = np.interp(final_wave, exp_wave, exp_flux)
+        chi2 += calc_chi2(obs_flux_final, exp_flux_final)
+
+    if io_dict['object_type'] == 'contact_binary':
+        fillout_factor = run_dictionary['fillout_factor']
+        teff_primary = run_dictionary['teff_primary']
+        teff_secondary = run_dictionary['teff_secondary']
+        period = run_dictionary['period']
+        sma = run_dictionary['sma']
+        inclination = run_dictionary['inclination']
+        q = run_dictionary['q']
+        t0 = run_dictionary['t0']
+        async_primary = run_dictionary['async_primary']
+        async_secondary = run_dictionary['async_secondary']
+        gamma = run_dictionary['gamma']
+        v_macro = run_dictionary['v_macro']
+        run_id = run_dictionary['run_id']
+        metallicity = run_dictionary['metallicity']
+        if io_dict['grid_type'] == 'K':
+            alpha_enhancement = run_dictionary['alpha_enhancement']
+            chi2_info = [chi2, fillout_factor, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, metallicity, alpha_enhancement, run_id, 1]
+        else:
+            chi2_info = [chi2, fillout_factor, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, metallicity, run_id, 1]
+
+    elif io_dict['object_type'] == 'binary':
+        r_equiv_primary = run_dictionary['r_equiv_primary']
+        r_equiv_secondary = run_dictionary['r_equiv_secondary']
+        teff_primary = run_dictionary['teff_primary']
+        teff_secondary = run_dictionary['teff_secondary']
+        period = run_dictionary['period']
+        sma = run_dictionary['sma']
+        inclination = run_dictionary['inclination']
+        q = run_dictionary['q']
+        t0 = run_dictionary['t0']
+        async_primary = run_dictionary['async_primary']
+        async_secondary = run_dictionary['async_secondary']
+        pitch_primary = run_dictionary['pitch_primary']
+        pitch_secondary = run_dictionary['pitch_secondary']
+        yaw_primary = run_dictionary['yaw_primary']
+        yaw_secondary = run_dictionary['yaw_secondary']
+        gamma = run_dictionary['gamma']
+        v_macro = run_dictionary['v_macro']
+        run_id = run_dictionary['run_id']
+        metallicity = run_dictionary['metallicity']
+        if io_dict['grid_type'] == 'K':
+            alpha_enhancement = run_dictionary['alpha_enhancement']
+            chi2_info = [chi2, r_equiv_primary, r_equiv_secondary, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, pitch_primary, pitch_secondary, yaw_primary, yaw_secondary, metallicity, alpha_enhancement, run_id, 1]
+        else:
+            chi2_info = [chi2, r_equiv_primary, r_equiv_secondary, teff_primary, teff_secondary, period, sma, q, inclination, gamma, v_macro, t0, async_primary, async_secondary, pitch_primary, pitch_secondary, yaw_primary, yaw_secondary, metallicity, run_id, 1]
+
+    elif io_dict['object_type'] == 'single':
+        teff = run_dictionary['teff']
+        mass = run_dictionary['mass']
+        r = run_dictionary['requiv']
+        r_pole = run_dictionary['r_pole']
+        if run_dictionary['inclination'] == -1:
+            inclination = np.arcsin(run_dictionary['vsini'] / run_dictionary['rotation_rate']) * 180/np.pi
+        else:
+            inclination = run_dictionary['inclination']
+        t0 = run_dictionary['t0']
+        gamma = run_dictionary['gamma']
+        v_macro = run_dictionary['v_macro']
+        run_id = run_dictionary['run_id']
+        v_crit_frac = run_dictionary['v_crit_frac']
+        if v_crit_frac == -1:
+            if run_dictionary['vsini'] == -1:
+                vsini = run_dictionary['rotation_rate'] * np.sin(run_dictionary['inclination'] * np.pi/180.)
+                rotation_rate = run_dictionary['rotation_rate']
+            if run_dictionary['rotation_rate'] == -1:
+                rotation_rate = run_dictionary['vsini'] / np.sin(run_dictionary['inclination'] * np.pi/180.)
+                vsini = run_dictionary['vsini']
+            else:
+                vsini = run_dictionary['vsini']
+                rotation_rate = run_dictionary['rotation_rate']
+        else:
+            rotation_rate = run_dictionary['rotation_rate']
+            vsini = run_dictionary['vsini']
+        metallicity = run_dictionary['metallicity']
+        if io_dict['grid_type'] == 'K':
+            alpha_enhancement = run_dictionary['alpha_enhancement']
+            chi2_info = [chi2, teff, vsini, rotation_rate, v_crit_frac, mass, r, r_pole, inclination, gamma, v_macro, t0, metallicity, alpha_enhancement, run_id, 1]
+        else:
+            chi2_info = [chi2, teff, vsini, rotation_rate, v_crit_frac, mass, r, r_pole, inclination, gamma, v_macro, t0, metallicity, run_id, 1]
+
+    chi_array.append(chi2_info)
     return chi_array
 
 
@@ -1942,42 +2858,70 @@ def PFGS(times, abund_param_values, line_list, io_dict, obs_specs, run_dictionar
     print('starting...' + str(run_dictionary['run_id']))
     model_path = update_output_directories(times, abund_param_values, io_dict, run_dictionary)
     if io_dict['object_type'] == 'contact_binary':
-        cb = run_cb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
-        spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary, model_path)
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            chi_array_fail = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'K':
+            chi_array_fail = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['metallicity'], run_dictionary['alpha_enhancement'], run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'T':
+            chi_array_fail = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['metallicity'], run_dictionary['run_id'], 1]]
         try:
+            cb = run_cb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
+            spec_by_phase_cb(cb, line_list, abund_param_values, io_dict, run_dictionary, model_path)
             if obs_specs == None:
-                chi_array = chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+                chi_array = chi_array_fail
             else:
-                chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                if io_dict['grid_type'] in ['FW', 'FWNN']:
+                    chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                elif io_dict['grid_type'] in ['K', 'T']:
+                    chi_array = calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
         except FileNotFoundError:
             print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
-            chi_array = [[9999, run_dictionary['fillout_factor'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 0]]
+            chi_array = chi_array_fail
+
     elif io_dict['object_type'] == 'binary':
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            chi_array_fail = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'K':
+            chi_array_fail = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], run_dictionary['metallicity'], run_dictionary['alpha_enhancement'], run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'T':
+            chi_array_fail = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], run_dictionary['metallicity'], run_dictionary['run_id'], 1]]
         try:
             b = run_b_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
             spec_by_phase_b(b, line_list, abund_param_values, io_dict, run_dictionary, model_path)
             if obs_specs == None:
-                chi_array = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+                chi_array = chi_array_fail
             else:
-                chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                if io_dict['grid_type'] in ['FW', 'FWNN']:
+                    chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                elif io_dict['grid_type'] in ['K', 'T']:
+                    chi_array = calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
         except FileNotFoundError:
             print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
-            chi_array = [[9999, run_dictionary['r_equiv_primary'], run_dictionary['r_equiv_secondary'], run_dictionary['teff_primary'], run_dictionary['teff_secondary'], run_dictionary['period'], run_dictionary['sma'], run_dictionary['q'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['t0'], run_dictionary['async_primary'], run_dictionary['async_secondary'], run_dictionary['pitch_primary'], run_dictionary['pitch_secondary'], run_dictionary['yaw_primary'], run_dictionary['yaw_secondary'], -1, -1, -1, -1, run_dictionary['run_id'], 0]]
+            chi_array = chi_array_fail
     elif io_dict['object_type'] == 'single':
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            chi_array_fail = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'K':
+            chi_array_fail = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['metallicity'], run_dictionary['alpha_enhancement'], run_dictionary['run_id'], 1]]
+        elif io_dict['grid_type'] == 'T':
+            chi_array_fail = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['v_macro'], run_dictionary['t0'], run_dictionary['metallicity'], run_dictionary['run_id'], 1]]
         try:
-            if io_dict['distortion'] in ['rotstar']:
+            if io_dict['distortion'] in ['rotstar', 'sphere']:
                 s = run_s_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
                 spec_by_phase_s(s, line_list, abund_param_values, io_dict, run_dictionary, model_path)
-            elif io_dict['distortion'] in ['roche', 'sphere']:
+            elif io_dict['distortion'] in ['roche']:
                 s = run_sb_phoebe_model(times, abund_param_values, io_dict, run_dictionary)
                 spec_by_phase_sb(s, line_list, abund_param_values, io_dict, run_dictionary, model_path)
             if obs_specs == None:
-                chi_array = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['t0'], -1, -1, -1, -1, run_dictionary['run_id'], 1]]
+                chi_array = chi_array_fail
             else:
-                chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                if io_dict['grid_type'] in ['FW', 'FWNN']:
+                    chi_array = calc_chi2_per_model_new(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
+                elif io_dict['grid_type'] in ['K', 'T']:
+                    chi_array = calc_chi2_per_model_TK(line_list, abund_param_values, obs_specs, run_dictionary, io_dict, model_path)
         except FileNotFoundError:
             print('\nFileNotFoundError: At least one patch falls outside of the specified grid.  This model will be skipped.  To prevent this in the future, run grid checks first by passing "-c" when running SPAMMS to make sure that all of the models fall within the grid.')
-            chi_array = [[9999, run_dictionary['teff'], run_dictionary['vsini'], run_dictionary['rotation_rate'], run_dictionary['v_crit_frac'], run_dictionary['mass'], run_dictionary['requiv'], run_dictionary['r_pole'], run_dictionary['inclination'], run_dictionary['gamma'], run_dictionary['t0'], -1, -1, -1, -1, run_dictionary['run_id'], 0]]
+            chi_array = chi_array_fail
 
     return chi_array
 
@@ -2000,6 +2944,7 @@ def main():
             run_checks = True
 
     try:
+        from schwimmbad import MultiPool
         pool = MultiPool(processes = n_cores)
     except:
         pass
@@ -2063,14 +3008,26 @@ def main():
     #     # print len(chi_full_array)
     #
     if io_dict['object_type'] == 'contact_binary':
-        np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma t0 async_primary async_secondary he c n o run_id run_success')
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary he c n o run_id run_success')
+        elif io_dict['grid_type'] == 'K':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %0.2f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary metallicity alpha_enhancement run_id run_success')
+        elif io_dict['grid_type'] == 'T':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.3f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.3f %i %i', header = 'chi2 fillout_factor teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary metallicity run_id run_success')
     elif io_dict['object_type'] == 'binary':
-        np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.2f %0.2f %0.2f %0.2f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary he c n o run_id run_success')
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary he c n o run_id run_success')
+        elif io_dict['grid_type'] == 'K':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.3f %0.2f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary metallicity alpha_enhancement run_id run_success')
+        elif io_dict['grid_type'] == 'T':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %0.2f %0.2f %d %d %f %0.2f %0.2f %0.1f %0.1f %0.1f %0.3f %0.2f %0.2f %0.1f %0.1f %0.1f %0.1f %0.3f %i %i', header = 'chi2 r_equiv_primary r_equiv_secondary teff_primary teff_secondary period sma q inclination gamma v_macro t0 async_primary async_secondary pitch_primary pitch_secondary yaw_primary yaw_secondary metallicity run_id run_success')
     if io_dict['object_type'] == 'single':
-        # try:
-        np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.3f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma t0 he c n o run_id run_success')
-        # except:
-        #     np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.2f %0.1f %0.1f %0.3f %0.3f %0.2f %0.2f %0.2f %s %s', header = 'chi2 teff rotation_rate mass r inclination gamma t0 he c n o run_id run_success')
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %0.2f %0.2f %0.2f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 he c n o run_id run_success')
+        elif io_dict['grid_type'] == 'K':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %0.2f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 metallicity alpha_enhancement run_id run_success')
+        elif io_dict['grid_type'] == 'T':
+            np.savetxt(io_dict['output_directory'] + 'chi_square_summary.txt', np.array(chi_full_array), fmt='%f %d %0.1f %0.1f %0.4f %0.1f %0.1f %0.2f %0.1f %0.1f %0.1f %0.3f %0.3f %i %i', header = 'chi2 teff vsini rotation_rate v_crit_frac mass r r_pole inclination gamma v_macro t0 metallicity run_id run_success')
 
     run_successes = [i[-1]==1 for i in chi_full_array]
     if np.all(np.array(run_successes)):

@@ -61,12 +61,15 @@ for param in columns:
         fit_params_unique[param] = np.unique(data[param])
 
 
-temp1, temp2, line_list, temp3 = read_input_file(run_location + '/input.txt')
+temp1, temp2, line_list, io_dict = read_input_file(run_location + '/input.txt')
 spec_file = glob.glob(run_location + '/input_spectra/*spec.txt')
 x = np.loadtxt(spec_file[0]).T
 
 line_bounds = settings.line_bounds()
-bounds = [line_bounds[line] + np.array([-5, 5]) for line in line_list]
+if io_dict['grid_type'] in ['FW', 'FWNN']:
+    bounds = [line_bounds[line] + np.array([-5, 5]) for line in line_list]
+elif io_dict['grid_type'] in ['T', 'K']:
+    bounds = [line for line in line_list]
 obs_wave = x[0]
 inds = [i for b in bounds for i, val in  enumerate(obs_wave) if val >= b[0] and val <= b[1]]
 inds = list(set(inds))
@@ -114,10 +117,13 @@ chi_sig = min_chi*(1. + np.sqrt(2./n_dof))
 
 
 i = np.argmin(data['chi2'])
-try:
-    min_mod = 'Model' + str(int(data['run_id'][i])).zfill(4) + ' He' + str(float(data['he'][i])) + '_C' + str(float(data['c'][i])) + '_N' + str(float(data['n'][i])) + '_O' + str(float(data['o'][i]))
-except:
-    min_mod = 'Model' + str(int(data['run_id'][i])).zfill(4) + ' He' + str(float(data['he'][i])) + '_CNO' + str(float(data['cno'][i]))
+if io_dict['grid_type'] in ['FW', 'FWNN']:
+    try:
+        min_mod = 'Model' + str(int(data['run_id'][i])).zfill(4) + ' He' + str(float(data['he'][i])) + '_C' + str(float(data['c'][i])) + '_N' + str(float(data['n'][i])) + '_O' + str(float(data['o'][i]))
+    except:
+        min_mod = 'Model' + str(int(data['run_id'][i])).zfill(4) + ' He' + str(float(data['he'][i])) + '_CNO' + str(float(data['cno'][i]))
+elif io_dict['grid_type'] in ['T', 'K']:
+    min_mod = 'Model' + str(int(data['run_id'][i])).zfill(4)
 print(min_mod)
 
 
@@ -231,11 +237,19 @@ except:
 line_bounds = settings.line_bounds()
 
 fig, axs = plt.subplots(1, len(line_list))
+if len(line_list) == 1:
+    axs = [axs]
 
 hjd = times[0]
 for ind, line in enumerate(line_list):
-    y = np.loadtxt(run_location + '/Model_' + str(int(min_mod['run_id'])).zfill(4) + '/He' + str(float(min_mod['he'])) + '_CNO7.5/hjd' + str(hjd).ljust(13, '0') + '_' + line + '.txt').T
-    bounds = line_bounds[line] + np.array([-10, 10])
+    if io_dict['grid_type'] in ['FW', 'FWNN']:
+        y = np.loadtxt(run_location + '/Model_' + str(int(min_mod['run_id'])).zfill(4) + '/He' + str(float(min_mod['he'])) + '_CNO7.5/hjd' + str(hjd).ljust(13, '0') + '_' + line + '.txt').T
+        bounds = line_bounds[line] + np.array([-10, 10])
+    elif io_dict['grid_type'] in ['T', 'K']:
+        wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+        y = np.loadtxt(run_location + '/Model_' + str(int(min_mod['run_id'])).zfill(4) + '/hjd' + str(hjd).ljust(13, '0') + '_' + wave_range_string + '.txt').T
+        bounds = line
+
 
     inds_obs = (x[0] >= bounds[0]) * (x[0] <= bounds[1])
     axs[ind].plot(x[0][inds_obs], x[1][inds_obs], 'k')
@@ -250,7 +264,11 @@ for ind, line in enumerate(line_list):
 
     chi_mods = []
     for mod in mods:
-        z = np.loadtxt(run_location + '/Model_' + str(int(mod['run_id'])).zfill(4) + '/He' + str(float(mod['he'])) + '_CNO7.5/hjd' + str(hjd).ljust(13, '0') + '_' + line + '.txt').T
+        if io_dict['grid_type'] in ['FW', 'FWNN']:
+            z = np.loadtxt(run_location + '/Model_' + str(int(mod['run_id'])).zfill(4) + '/He' + str(float(mod['he'])) + '_CNO7.5/hjd' + str(hjd).ljust(13, '0') + '_' + line + '.txt').T
+        elif io_dict['grid_type'] in ['T', 'K']:
+            wave_range_string = '%0.2f-%0.2f' % (line[0], line[1])
+            z = np.loadtxt(run_location + '/Model_' + str(int(mod['run_id'])).zfill(4) + '/hjd' + str(hjd).ljust(13, '0') + '_' + wave_range_string + '.txt').T
         chi_mods.append(np.interp(w, z[0], z[1]))
 
     upper = np.max(chi_mods, axis=0)
