@@ -1100,13 +1100,13 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
     if run_dictionary['vmacro'] == -1:
         AR = run_dictionary['A_R']
         AT = 1-AR
-        if run_dictionary['zeta_R_sig'] > 0:
+        if run_dictionary['zeta_R'] > 0:
             zeta_R = np.random.normal(0, run_dictionary['zeta_R'], size=star_profs.shape[0])
         else:
             zeta_R = np.ones(star_profs.shape[0]) * run_dictionary['zeta_R']
         v_R = AR * mesh_vals['mus'] * zeta_R
 
-        if run_dictionary['zeta_T_sig'] > 0:
+        if run_dictionary['zeta_T'] > 0:
             zeta_T = np.random.normal(0, run_dictionary['zeta_T'], size=star_profs.shape[0])
         else:
             zeta_T = np.ones(star_profs.shape[0]) * run_dictionary['zeta_T']
