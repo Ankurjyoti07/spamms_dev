@@ -2061,11 +2061,11 @@ def determine_tgr_combinations(cb, io_dict, run_dictionary):
         if io_dict['rad_bound']:
             rads = apply_rad_bound(io_dict, rads, ts, lgs)
 
-        combinations = ['T' + str(int(tls[i])) + '_G' + str(lgs[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))]
-        combinations.extend(['T' + str(int(tls[i])) + '_G' + str(lgls[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
-        combinations.extend(['T' + str(int(tls[i])) + '_G' + str(lgus[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
-        combinations.extend(['T' + str(int(tus[i])) + '_G' + str(lgls[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
-        combinations.extend(['T' + str(int(tus[i])) + '_G' + str(lgus[i]) + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations = ['T' + str(int(tls[i])) + '_G' + format(lgs[i], '.1f') + '_R' + format(rads[i], '.2f') for i in range(len(ts))]
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgls[i], '.1f') + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tls[i])) + '_G' + format(lgus[i], '.1f') + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgls[i], '.1f') + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
+        combinations.extend(['T' + str(int(tus[i])) + '_G' + format(lgus[i], '.1f') + '_R' + format(rads[i], '.2f') for i in range(len(ts))])
         
     
     elif io_dict['grid_type'] == 'K':
