@@ -334,6 +334,8 @@ def read_s_input_file(input_file):
     if (max(fit_param_values['zeta_T']) > 0 or max(fit_param_values['zeta_R']) > 0) and np.any(np.array(fit_param_values['v_macro']) > 0):
         print('vmacro and zeta_R/zeta_T cannot both be greater than 0. Defaulting to zeta_R/zeta_T and turning vmacro off')
         fit_param_values['v_macro'] = [-1.0]
+    elif (max(fit_param_values['zeta_T']) > 0 or max(fit_param_values['zeta_R']) > 0):
+        fit_param_values['v_macro'] = [-1.0]
 
     if grid_type == 'K':
         alpha = np.where(np.array(fit_param_values['alpha_enhancement']) >= 1, 1, 0)
@@ -1097,7 +1099,7 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
     wind_profs = np.array(wind_low_profs) * w1s + np.array(wind_high_profs) * w2s + np.array(wind_high_profs) * w3s
 
     # Macro
-    if run_dictionary['vmacro'] == -1:
+    if run_dictionary['v_macro'] == -1:
         AR = run_dictionary['A_R']
         AT = 1-AR
         if run_dictionary['zeta_R'] > 0:
