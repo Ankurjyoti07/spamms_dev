@@ -13,3 +13,5 @@ Grids/*
 !Grids/.gitkeep
 !Demo/
 !Demo/.gitkeep
+!notebooks/
+!notebooks/**
