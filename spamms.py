@@ -1,13 +1,7 @@
-__version__ = '1.2.0'
+__version__ = '1.2.0-vmacro'
 
 import numpy as np
-import glob
-import os
-import shutil
-import sys
-import itertools
-import time
-import functools
+import glob, os, shutil, sys, itertools, time, functools, math, getopt
 from scipy.interpolate import splrep, splev
 from scipy import stats
 from scipy.special import erf
@@ -15,16 +9,11 @@ from scipy.signal import fftconvolve
 import scipy.optimize as so
 import phoebe
 from phoebe import u,c
-import math
 from tqdm import tqdm, trange
 import settings
 from astropy.constants import R_sun, M_sun, G
-import getopt
 # import tarfile
 # from io import BytesIO
-
-
-
 
 def read_input_file(input_file):
     print('Reading input file...')
