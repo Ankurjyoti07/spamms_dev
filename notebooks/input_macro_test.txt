@@ -9,7 +9,7 @@ times = [0.0]
 
 teff =                35000
 r_pole =              7.5
-mass =                20
+mass =                25
 inclination =         90
 v_crit_frac =         [0, 0.25, 0.5, 0.75, 0.9]
 A_R =                 0.5
