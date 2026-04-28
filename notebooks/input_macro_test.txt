@@ -3,17 +3,17 @@ object_type = single
 path_to_obs_spectra = None
 output_directory = Outputs/results/zetaR_zetaT_grid/
 path_to_grid = Grids/Demo_Grid
-ntriangles = 10000
+ntriangles = 20000
 times = [0.0]
 
 
 teff =                40000
 r_pole =              6.5
 mass =                25
-inclination =         90
-v_crit_frac =         0.9
-sigma_R =             250
-sigma_T =             250
+inclination =         [10, 30, 50, 70, 90] 
+v_crit_frac =         [0.1, 0.3, 0.5, 0.7, 0.9]
+sigma_R =             [100, 150, 200, 250, 300, 350]
+sigma_T =             [100, 150, 200, 250, 300, 350]
 t0 =                  0.000
 distortion =          roche
 gamma =               0
@@ -23,6 +23,6 @@ he_abundances =       [0.1]
 cno_abundances =      [7.5]
 lp_bins =             161
 
-#selected_he_line_list = ['HEI4471']
-selected_line_list = ['HEI4471']
+#selected_he_line_list = ['HEI4471', 'HEI4026', 'HEII4200']
+selected_line_list = ['HEI4471', 'HEI4026', 'HEII4200']
 #selected_line_list = ['CIII4069', 'CIII4187', 'HDELTA', 'HEI4026', 'HEI4121', 'HEI4143', 'HEI4387', 'HEI4471', 'HEII4200', 'HEII4541', 'HEPS', 'HGAMMA', 'NIII4379', 'NIIIqua', 'NIIItrip', 'NIV4058']
