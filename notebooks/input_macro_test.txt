@@ -1,7 +1,7 @@
 object_type = single
 
 path_to_obs_spectra = None
-output_directory = Outputs/results/zetaR_zetaT_grid/
+output_directory = Outputs/results/zetaR_zetaT_inc_vcrit_grid/
 path_to_grid = Grids/Demo_Grid
 ntriangles = 20000
 times = [0.0]
@@ -10,10 +10,10 @@ times = [0.0]
 teff =                40000
 r_pole =              6.5
 mass =                25
-inclination =         [10, 30, 50, 70, 90] 
-v_crit_frac =         [0.1, 0.3, 0.5, 0.7, 0.9]
-sigma_R =             [100, 150, 200, 250, 300, 350]
-sigma_T =             [100, 150, 200, 250, 300, 350]
+inclination =         [30, 34, 38, 42, 46, 50, 54, 58, 62, 66, 70, 74, 78] 
+v_crit_frac =         [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65,  0.7, 0.75, 0.8]
+sigma_R =             [150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350]
+sigma_T =             [120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350]
 t0 =                  0.000
 distortion =          roche
 gamma =               0
