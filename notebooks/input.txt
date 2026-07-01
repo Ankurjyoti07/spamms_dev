@@ -1,6 +1,6 @@
 object_type = single
 path_to_obs_spectra = None
-output_directory = Outputs/results/pure_rot_inc_vcrit_grid/
+output_directory = Outputs/results/diagnostic_grid/
 path_to_grid = Grids/Demo_Grid
 ntriangles = 20000
 times = [0.0]
@@ -8,10 +8,10 @@ times = [0.0]
 teff =                40000
 r_pole =              6.5
 mass =                25
-inclination =         [10, 30, 50, 70, 90] 
-v_crit_frac =         [0.1, 0.3, 0.5, 0.7, 0.9]
-sigma_R =             0
-sigma_T =             0
+inclination =         [90] 
+v_crit_frac =         [0, 0.9]
+sigma_R =             [0, 200]
+sigma_T =             [0, 200]
 t0 =                  0.000
 distortion =          roche
 gamma =               0
@@ -22,6 +22,6 @@ cno_abundances =      [7.5]
 lp_bins =             161
 
 #selected_he_line_list = ['HEI4471', 'HEI4026', 'HEII4200']
-selected_line_list = ['HEI4471', 'HEI4026', 'HEII4200']
+selected_line_list = ['HEI4026', 'HEII4200', 'HEI4387', ]
 #selected_line_list = ['CIII4069', 'CIII4187', 'HDELTA', 'HEI4026', 'HEI4121', 'HEI4143', 'HEI4387', 'HEI4471', 'HEII4200', 'HEII4541', 'HEPS', 'HGAMMA', 'NIII4379', 'NIIIqua', 'NIIItrip', 'NIV4058']
 
