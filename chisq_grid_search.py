@@ -15,7 +15,8 @@ FIXED_PARAMS = {
     "r_pole": 6.5,
     "mass": 25,
     "inclination": 30,
-    "v_crit_frac": 0.9}
+    "v_crit_frac": 0.9
+    }
 SIGMA_MODE = "shared"   # "shared" --or-- "per_line"
 
 OUTPUT_GLOBAL = RESULT_DIR / "chisq_results_global.csv"
