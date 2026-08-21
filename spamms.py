@@ -1100,7 +1100,7 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
 
     # Macro
     if run_dictionary['v_macro'] == -1:
-	np.random.seed(12345)
+        np.random.seed(12345)
         if run_dictionary['sigma_R'] > 0:
             sigma_R = np.random.normal(0, run_dictionary['sigma_R'], size=star_profs.shape[0])
         else:
@@ -1281,6 +1281,9 @@ def lookup_line_profs_from_dic_FW(t, g, r, m, v, line, lines_dic):
 
     rise = upper - lower
     risew = upperw - lowerw
+
+    run = x -ind
+    runw = xw - indw
 
     star_prof = lower + rise*run
     wind_prof = lowerw + risew*runw
