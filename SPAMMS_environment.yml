@@ -1,4 +1,4 @@
-name: SPAMMS_env
+name: spamms
 channels:
   - conda-forge
   - defaults

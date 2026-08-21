@@ -1100,6 +1100,7 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
 
     # Macro
     if run_dictionary['v_macro'] == -1:
+	np.random.seed(12345)
         if run_dictionary['sigma_R'] > 0:
             sigma_R = np.random.normal(0, run_dictionary['sigma_R'], size=star_profs.shape[0])
         else:
@@ -1250,21 +1251,36 @@ def lookup_line_profs_from_dic_FW(t, g, r, m, v, line, lines_dic):
     pray_phot_norm = pray_phot/wlfr
     pray_wind_norm = pray_wind/wlfr
 
-    ind = int(pray_phot*100)
-    indw = int(pray_wind_norm*100)
+    #ind = int(pray_phot*100)
+    #indw = int(pray_wind_norm*100)
 
     # print filename, ind
 
-    upper = lines_dic[line]['phot'][combination][ind+1]
-    lower = lines_dic[line]['phot'][combination][ind]
-    upperw = lines_dic[line]['wind'][combination][indw+1]
-    lowerw = lines_dic[line]['wind'][combination][indw]
+    #upper = lines_dic[line]['phot'][combination][ind+1]
+    #lower = lines_dic[line]['phot'][combination][ind]
+    #upperw = lines_dic[line]['wind'][combination][indw+1]
+    #lowerw = lines_dic[line]['wind'][combination][indw]
+
+    #rise = upper - lower
+    #risew = upperw - lowerw
+
+    #run = (pray_phot*100)%1
+    #runw = (pray_wind_norm*100)%1
+
+    phot = lines_dic[line]['phot'][combination]
+    wind = lines_dic[line]['wind'][combination]
+
+    x = np.clip(pray_phot * 100, 0, len(phot) - 1)
+    xw = np.clip(pray_wind_norm * 100, 0, len(wind) - 1)
+
+    ind = min(int(x), len(phot) - 2)
+    indw = min(int(xw), len(wind) - 2)
+
+    lower, upper = phot[ind], phot[ind + 1]
+    lowerw, upperw = wind[indw], wind[indw + 1]
 
     rise = upper - lower
     risew = upperw - lowerw
-
-    run = (pray_phot*100)%1
-    runw = (pray_wind_norm*100)%1
 
     star_prof = lower + rise*run
     wind_prof = lowerw + risew*runw
