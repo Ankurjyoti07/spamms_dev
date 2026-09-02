@@ -8,14 +8,14 @@ from tqdm import tqdm
 
 # Configuration
 GRID_DIR = Path("/stars/c4011027/spamms_dev/Outputs/zeta_Oph_grid")
-MODEL_INDEX = Path("/stars/c4011027/spamms_dev/Outputs/model_index.parquet")
-OBS_FILE = Path("/stars/c4011027/spamms_dev/Outputs/spectrum.txt")
+MODEL_INDEX = Path("/stars/c4011027/spamms_dev/Outputs/zeta_oph_model_index.parquet")
+OBS_FILE = Path("/stars/c4011027/spamms_dev/Outputs/zeta_oph_spectrum.txt")
 NCORES = 15
 
 # Lines included in the joint fit
 FIT_LINES = ["HEI4026", "HEII4200"]
-LINE_WINDOWS = {"HEI4026": (4017.0, 4036.0),
-		"HEII4200": (4192.0, 4206.0)}
+LINE_WINDOWS = {"HEI4026": (4017.0, 4034.0),
+		"HEII4200": (4192.0, 4208.0)}
 
 # Parameters that are kept fixed during the grid search.
 # Set a parameter to:

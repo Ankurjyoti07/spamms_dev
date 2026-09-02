@@ -7,7 +7,7 @@ import pandas as pd
 BASE_DIR = Path("/stars/c4011027/spamms_dev")
 GRID_DIR = BASE_DIR / "Outputs" / "zeta_Oph_grid"
 INPUT_FILE = GRID_DIR / "input.txt"
-OUTPUT_FILE = BASE_DIR / "Outputs/model_index.parquet"
+OUTPUT_FILE = BASE_DIR / "Outputs/zeta_oph_model_index.parquet"
 
 def strip_comment(line):
     return line.split("#", 1)[0].strip()
