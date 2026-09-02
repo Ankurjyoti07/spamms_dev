@@ -1100,7 +1100,7 @@ def assign_spectra_interp_FW(mesh_vals, line, lines_dic, io_dict, abund_param_va
 
     # Macro
     if run_dictionary['v_macro'] == -1:
-        np.random.seed(12345)
+        np.random.seed(12345) #random seed for a deteministic distribution.
         if run_dictionary['sigma_R'] > 0:
             sigma_R = np.random.normal(0, run_dictionary['sigma_R'], size=star_profs.shape[0])
         else:
